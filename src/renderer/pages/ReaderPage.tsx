@@ -111,6 +111,7 @@ export function ReaderPage({
     useLibraryStore();
   const viewerContainerRef = useRef<HTMLDivElement | null>(null);
   const viewerElRef = useRef<HTMLDivElement | null>(null);
+  const selOverlayRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<InstanceType<typeof import('pdfjs-dist/web/pdf_viewer').PDFViewer> | null>(null);
   const eventBusRef = useRef<InstanceType<typeof import('pdfjs-dist/web/pdf_viewer').EventBus> | null>(null);
   const notesRef = useRef<NoteRecord[]>([]);
@@ -277,6 +278,50 @@ export function ReaderPage({
     setSelectedText(sel);
   };
 
+  // 自定义选区高亮：Chromium 对 pdfjs 文本层（绝对定位 span）的原生选区渲染
+  // 会退化成整行矩形（选中一个词也高亮整行）。这里禁用原生 ::selection 背景，
+  // 改用 Range.getClientRects()（精确到词的几何）自绘高亮层。
+  const drawSelectionHighlight = useCallback(() => {
+    const overlay = selOverlayRef.current;
+    const container = viewerContainerRef.current;
+    if (!overlay || !container) return;
+    overlay.replaceChildren();
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    // 只处理文本层内的选区（侧栏等处的选区不画）
+    let node: Node | null = range.startContainer;
+    let inTextLayer = false;
+    while (node && node !== document.body) {
+      if (node instanceof HTMLElement && node.classList.contains('textLayer')) {
+        inTextLayer = true;
+        break;
+      }
+      node = node.parentNode;
+    }
+    if (!inTextLayer) return;
+    const crect = container.getBoundingClientRect();
+    const rects = range.getClientRects();
+    for (const r of rects) {
+      if (r.width === 0 || r.height === 0) continue;
+      const d = document.createElement('div');
+      d.style.cssText = `position:absolute;left:${r.left - crect.left + container.scrollLeft}px;top:${r.top - crect.top + container.scrollTop}px;width:${r.width}px;height:${r.height}px;background:rgba(66,133,244,0.35);border-radius:2px;pointer-events:none;`;
+      overlay.appendChild(d);
+    }
+  }, []);
+
+  // 监听选区变化 / 滚动，重绘精确选区高亮。
+  useEffect(() => {
+    const container = viewerContainerRef.current;
+    const onSel = () => requestAnimationFrame(drawSelectionHighlight);
+    document.addEventListener('selectionchange', onSel);
+    container?.addEventListener('scroll', onSel, { passive: true });
+    return () => {
+      document.removeEventListener('selectionchange', onSel);
+      container?.removeEventListener('scroll', onSel);
+    };
+  }, [drawSelectionHighlight]);
+
   // 批注数据同步到 ref（渲染高亮用），并在变化后重放已渲染页的高亮。
   useEffect(() => {
     const list = notes[paperId ?? ''] ?? [];
@@ -400,7 +445,17 @@ export function ReaderPage({
             sx={{ position: 'absolute', inset: 0, overflow: 'auto', border: '1px solid', borderColor: 'divider' }}
             onMouseUp={onMouseUp}
           >
+            {/* 禁用文本层原生选区背景（Chromium 对绝对定位 span 的选区渲染退化为整行矩形），由自绘层替代 */}
+            <style>{`
+              .textLayer ::selection { background: transparent; }
+              .textLayer ::-moz-selection { background: transparent; }
+            `}</style>
             <div ref={viewerElRef} className="pdfViewer" style={{ position: 'relative' }} />
+            {/* 精确选区高亮层（Chromium 对文本层的原生选区会整行高亮，这里自绘替代） */}
+            <div
+              ref={selOverlayRef}
+              style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 5 }}
+            />
           </Box>
         </Box>
       </Box>
