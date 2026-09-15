@@ -120,13 +120,27 @@ export function WritingPage() {
           </Typography>
           <Typography variant="caption" color="text.secondary">选择论文新建草稿</Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
-            <Select size="small" value={paperId} onChange={(e) => setPaperId(e.target.value)} displayEmpty sx={{ flexGrow: 1 }}>
+            <Select
+              size="small"
+              value={paperId}
+              onChange={(e) => setPaperId(e.target.value)}
+              displayEmpty
+              sx={{
+                flexGrow: 1,
+                minWidth: 0,
+                '& .MuiSelect-select': { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+              }}
+            >
               <MenuItem value="" disabled>
                 选择论文…
               </MenuItem>
               {papers.map((p) => (
-                <MenuItem key={p.id} value={p.id}>
-                  {(latexToText(p.title) || p.title).slice(0, 40)}
+                <MenuItem
+                  key={p.id}
+                  value={p.id}
+                  sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 420 }}
+                >
+                  {(latexToText(p.title) || p.title).slice(0, 60)}
                 </MenuItem>
               ))}
             </Select>
@@ -143,11 +157,19 @@ export function WritingPage() {
             value={refIds}
             onChange={(e) => setRefIds(e.target.value as string[])}
             renderValue={(sel) => `${sel.length} 篇参考`}
-            sx={{ mt: 0.5, width: '100%' }}
+            sx={{
+              mt: 0.5,
+              width: '100%',
+              '& .MuiSelect-select': { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+            }}
           >
             {papers.map((p) => (
-              <MenuItem key={p.id} value={p.id}>
-                {(latexToText(p.title) || p.title).slice(0, 40)}
+              <MenuItem
+                key={p.id}
+                value={p.id}
+                sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 420 }}
+              >
+                {(latexToText(p.title) || p.title).slice(0, 60)}
               </MenuItem>
             ))}
           </Select>
