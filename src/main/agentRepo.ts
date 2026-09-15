@@ -92,6 +92,24 @@ export class AgentRepo {
       .run(title, Date.now(), id);
   }
 
+  /**
+   * 引擎（重新）启动后调用：所有既有会话的 dshSessionId 在旧引擎进程里已失效，
+   * 新引擎用旧 id prompt 会命中持久化里的「已销毁 agent」→ 报错无回复。
+   * 统一轮换为新 UUID，让下次 prompt 走「新建会话」路径。
+   */
+  rotateAllDshSessionIds(): void {
+    const rows = this.db.raw.prepare('SELECT id FROM agent_sessions').all() as Array<{ id: string }>;
+    const stmt = this.db.raw.prepare('UPDATE agent_sessions SET dsh_session_id = ?, updated_at = ? WHERE id = ?');
+    for (const r of rows) stmt.run(randomUUID(), Date.now(), r.id);
+  }
+
+  /** 轮换单个会话的 dshSessionId（Esc 打断后：旧回合仍占着原 dsh 会话，换新 id 立即可回复）。 */
+  rotateDshSessionId(id: string): void {
+    this.db.raw
+      .prepare('UPDATE agent_sessions SET dsh_session_id = ?, updated_at = ? WHERE id = ?')
+      .run(randomUUID(), Date.now(), id);
+  }
+
   touchSession(id: string): void {
     this.db.raw.prepare('UPDATE agent_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), id);
   }

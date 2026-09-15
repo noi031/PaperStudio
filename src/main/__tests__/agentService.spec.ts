@@ -10,6 +10,8 @@ interface FakeHost {
   active: Map<string, Set<(e: unknown) => void>>;
   started: boolean;
   ready: boolean;
+  /** 记录 sendMessage 收到的 (sessionId, text)，供断言插入历史等场景。 */
+  sent: Array<{ sessionId: string; text: string }>;
   on(sessionId: string, listener: (e: unknown) => void): () => void;
   sendMessage(sessionId: string, text: string): Promise<void>;
   start(): Promise<string>;
@@ -27,6 +29,7 @@ function makeHost(): FakeHost {
   const host: FakeHost = {
     active,
     started: false,
+    sent: [],
     get ready() {
       return this.started;
     },
@@ -49,7 +52,8 @@ function makeHost(): FakeHost {
       active.clear();
       pending.clear();
     },
-    async sendMessage(sessionId) {
+    async sendMessage(sessionId, text) {
+      this.sent.push({ sessionId, text });
       pending.set(sessionId, [...(active.get(sessionId) ?? [])]);
     },
     emitTurn(sessionId) {
@@ -82,6 +86,7 @@ function makeRepo() {
   return {
     session,
     messages,
+    rotated: [] as string[],
     repo: {
       getSession: () => session,
       appendMessage: (sessionId: string, role: string, kind: string, content: string) => {
@@ -93,7 +98,10 @@ function makeRepo() {
       deleteSession: () => {},
       renameSession: () => {},
       touchSession: () => {},
-      listMessages: () => [],
+      rotateAllDshSessionIds: () => {},
+      rotateDshSessionId: () => {},
+      listMessages: () =>
+        messages.map((m) => ({ id: 'm', sessionId: m.sessionId, role: m.role, kind: m.kind, content: m.content, createdAt: 1 })),
       deleteMessages: () => {},
     } as unknown as AgentRepo,
   };
@@ -222,5 +230,31 @@ describe('AgentService 多回合事件不重复累积', () => {
     emit({ kind: 'status', status: 'idle' });
     await wait();
     expect(mr.messages.filter((m) => m.role === 'assistant')).toHaveLength(0);
+  });
+
+  it('引擎重启/打断轮换后：首条消息注入会话历史（不包含当前消息本身）', async () => {
+    // 模拟 DB 里已有历史（引擎重启前的对话）。
+    mr.messages.push(
+      { sessionId: 's1', role: 'user', kind: 'text', content: '之前的提问' },
+      { sessionId: 's1', role: 'assistant', kind: 'text', content: '之前的回答' },
+    );
+    const svcAny = svc as unknown as { rotatedSessions: Set<string> };
+    svcAny.rotatedSessions.add('s1'); // 模拟 ensureStarted 轮换后的标记
+
+    await svc.sendMessage('s1', '新问题');
+    expect(host.sent).toHaveLength(1);
+    const sent = host.sent[0].text;
+    expect(sent).toContain('之前的提问');
+    expect(sent).toContain('之前的回答');
+    // 历史部分（分隔符之前）不得包含当前消息自身。
+    const historyPart = sent.split('\n\n')[0] ?? '';
+    expect(historyPart).not.toContain('新问题');
+    expect(sent.endsWith('新问题')).toBe(true);
+    // 注入只发生一次：rotated 标记已消费。
+    expect(svcAny.rotatedSessions.has('s1')).toBe(false);
+
+    // 第二轮（非轮换）不再注入历史。
+    await svc.sendMessage('s1', '又一轮');
+    expect(host.sent[1].text).toBe('又一轮');
   });
 });

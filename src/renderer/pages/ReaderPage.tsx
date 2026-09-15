@@ -26,6 +26,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import { useLibraryStore } from '../store/libraryStore';
 import { useAssistantStore } from '../store/assistantStore';
+import { PromptEditor } from '../components/PromptEditor';
 import type { SummaryRecord, NoteRecord, NoteType } from '../../shared/types';
 import { latexToText } from '../../shared/latex';
 
@@ -422,6 +423,8 @@ export function ReaderPage({
           >
             {fullText ? '总结全文' : '全文提取中…'}
           </Button>
+          <PromptEditor settingKey="promptSummarySelected" label="总结选中段落" hint="「总结选中段落」使用的 AI 提示词" />
+          <PromptEditor settingKey="promptSummaryFull" label="总结全文" hint="「总结全文」使用的 AI 提示词" />
 
           {runningStreams.map((s) => (
             <Box key={s.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>

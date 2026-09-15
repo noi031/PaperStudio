@@ -29,6 +29,8 @@ export class AgentService {
   private mcpEntry = '';
   /** in-flight 启动 promise：并发 ensureStarted 共享同一次启动，防重复 spawn。 */
   private starting: Promise<string> | null = null;
+  /** 引擎启动后已被轮换 dshSessionId 的会话：其首条消息需注入历史上下文（引擎侧记忆已丢）。 */
+  private rotatedSessions = new Set<string>();
 
   constructor(private readonly opts: AgentServiceOptions) {}
 
@@ -46,6 +48,10 @@ export class AgentService {
         .then((v) => {
           this.version = v;
           this.started = true;
+          // 引擎（重新）启动：旧进程的 dshSessionId 已全部失效，
+          // 轮换为新 id（下次 prompt 走「新建会话」路径），并标记会话：首条消息注入历史。
+          this.opts.repo.rotateAllDshSessionIds();
+          for (const s of this.opts.repo.listSessions()) this.rotatedSessions.add(s.id);
           return v;
         })
         .finally(() => {
@@ -91,12 +97,16 @@ export class AgentService {
     return this.opts.repo.listMessages(sessionId);
   }
 
-  /** 发一条用户消息：落库 → 送 dsh → 订阅事件流（累积 + 转发 + 落库）。 */
+  /** 发一条用户消息：落库 → 送 dsh → 订阅事件流（累积 + 转发 + 落库）。
+   *  rotated 会话（引擎重启/打断后已换新 dsh 会话）首条消息注入历史上下文，
+   *  让新引擎会话能「接上」之前的对话。 */
   async sendMessage(sessionId: string, text: string): Promise<void> {
+    // 先确保引擎已启动：首次启动会轮换所有会话的 dshSessionId，
+    // 因此 session（含最新 dshSessionId）必须在 ensureStarted 之后重新读取。
+    await this.ensureStarted();
+
     const session = this.opts.repo.getSession(sessionId);
     if (!session) throw new Error('会话不存在');
-
-    await this.ensureStarted();
 
     const userMsg = this.opts.repo.appendMessage(sessionId, 'user', 'text', text);
     this.emitToWindow({
@@ -104,6 +114,14 @@ export class AgentService {
       sessionId,
       message: userMsg,
     });
+
+    // 轮换后的第一条消息：注入会话历史（DB 里有完整消息，落库 user 消息仍用原文）。
+    let effective = text;
+    if (this.rotatedSessions.has(sessionId)) {
+      this.rotatedSessions.delete(sessionId);
+      const history = this.buildHistoryContext(sessionId);
+      if (history) effective = `${history}\n\n${text}`;
+    }
 
     const st: StreamState = { text: '', reasoning: '', tool: null, finished: false };
     this.streams.set(sessionId, st);
@@ -116,7 +134,7 @@ export class AgentService {
     });
     this.streamOffs.set(sessionId, off);
     try {
-      await this.opts.host.sendMessage(session.dshSessionId, text);
+      await this.opts.host.sendMessage(session.dshSessionId, effective);
     } catch (err) {
       off();
       this.streamOffs.delete(sessionId);
@@ -125,6 +143,24 @@ export class AgentService {
       this.emitToWindow({ type: 'error', sessionId, message: msg });
       throw err;
     }
+  }
+
+  /** 组装会话历史摘要（最近若干条 user/assistant 消息），用于注入轮换后的新 dsh 会话。
+   *  注意：刚落库的当前 user 消息已在数组末尾，需排除，避免历史里重复一遍。 */
+  private buildHistoryContext(sessionId: string): string {
+    const msgs = this.opts.repo.listMessages(sessionId);
+    const recent = msgs
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(0, -1) // 排除当前消息
+      .slice(-12)
+      .map((m) => {
+        const who = m.role === 'user' ? '用户' : '助手';
+        const c = m.kind === 'reasoning' ? '' : m.content;
+        return c ? `${who}：${c.slice(0, 400)}` : null;
+      })
+      .filter((x): x is string => !!x);
+    if (recent.length === 0) return '';
+    return `【以下是本会话此前的对话历史（引擎会话已重置，供你接续上下文）：】\n${recent.join('\n')}`;
   }
 
   private async handleEvent(sessionId: string, e: AgentEvent, st: StreamState): Promise<void> {
@@ -195,8 +231,10 @@ export class AgentService {
    * 注意：本机 dsh SDK 协议白名单只有 initialize / session/prompt / shutdown，
    * 无 session 级打断 RPC（session/cancel 仅存在于 UI 侧 client-connection 的
    * fixture 实现），因此引擎侧旧回合无法真正终止——它会在后台自然跑完并
-   * 被丢弃（listener 已注销，不再转发）。这里保证的是：UI 立即停止展示、
-   * 状态复位、输入框恢复可用、可继续发新消息（新消息会在旧回合 idle 后执行）。
+   * 被丢弃（listener 已注销，不再转发）。
+   * 关键：打断后立即轮换该会话的 dshSessionId——若复用旧 id，下一条消息会
+   * 被引擎排队到旧回合跑完才执行（表现为「继续对话没回复」）。换新 id 后下一条
+   * 消息走全新 dsh 会话立刻执行，并自动注入会话历史上下文（首条消息）。
    */
   async stop(sessionId: string): Promise<void> {
     const session = this.opts.repo.getSession(sessionId);
@@ -210,6 +248,9 @@ export class AgentService {
     this.streams.delete(sessionId);
     this.streamOffs.get(sessionId)?.();
     this.streamOffs.delete(sessionId);
+    // 轮换 dshSessionId：下次 sendMessage 走新 dsh 会话，立即可回复；首条注入历史。
+    this.opts.repo.rotateDshSessionId(sessionId);
+    this.rotatedSessions.add(sessionId);
     // 通知渲染进程：回合被用户打断（收尾流式缓冲）。
     this.emitToWindow({ type: 'status', sessionId, status: 'idle' });
     this.emitToWindow({ type: 'finish', sessionId, reason: 'interrupted' });

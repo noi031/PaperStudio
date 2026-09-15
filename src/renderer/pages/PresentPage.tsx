@@ -24,6 +24,7 @@ import SlideshowIcon from '@mui/icons-material/Slideshow';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useLibraryStore } from '../store/libraryStore';
 import { usePresentationStore } from '../store/presentationStore';
+import { PromptEditor } from '../components/PromptEditor';
 import { latexToText } from '../../shared/latex';
 import type { PresentationRecord } from '../../shared/types';
 
@@ -154,6 +155,7 @@ export function PresentPage() {
                   导出 PPTX
                 </Button>
               </Stack>
+              <PromptEditor settingKey="promptSlides" label="生成幻灯片" hint="「生成幻灯片」使用的 AI 提示词" />
               {exporting && (
                 <Typography variant="caption" color="primary">
                   正在导出…

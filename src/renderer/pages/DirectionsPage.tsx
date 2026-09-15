@@ -18,6 +18,7 @@ import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useLibraryStore } from '../store/libraryStore';
 import { useDirectionsStore } from '../store/directionsStore';
+import { PromptEditor } from '../components/PromptEditor';
 import { latexToText } from '../../shared/latex';
 
 export function DirectionsPage() {
@@ -97,6 +98,7 @@ export function DirectionsPage() {
             </Button>
             {generating && <CircularProgress size={20} />}
           </Stack>
+          <PromptEditor settingKey="promptDirections" label="生成方向建议" hint="「生成方向建议」使用的 AI 提示词" />
           {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}
         </CardContent>
       </Card>

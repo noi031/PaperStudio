@@ -25,6 +25,7 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useLibraryStore } from '../store/libraryStore';
 import { useWritingStore } from '../store/writingStore';
+import { PromptEditor } from '../components/PromptEditor';
 import { latexToText } from '../../shared/latex';
 import type { DraftRecord } from '../../shared/types';
 
@@ -257,6 +258,8 @@ export function WritingPage() {
                   导出 MD
                 </Button>
               </Stack>
+              <PromptEditor settingKey="promptOutline" label="生成大纲" hint="「生成大纲」使用的 AI 提示词" />
+              <PromptEditor settingKey="promptSection" label="撰写小节" hint="「AI 撰写 / AI 重写」使用的 AI 提示词" />
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                 📐 草稿以 LaTeX 源码撰写：数学用 $…$（如 {'$\\gamma$'}、{'$E=mc^2$'}），引用参考论文用 {'\\cite{key}'}
                 （导出 .tex 时自动映射并生成 refs.bib，可用 xelatex 编译）
