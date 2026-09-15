@@ -6,7 +6,9 @@ import type { BrowserWindow } from 'electron';
 import type { PaperSettings, SummaryEvent, SummaryKind } from '../shared/types.js';
 
 /** 全文总结输入截断上限（防超上下文）。 */
-export const MAX_INPUT_CHARS = 60000;
+export const MAX_INPUT_CHARS = 120000;
+/** 输出 token 上限：不传时多数服务默认 4096，长总结会被截断，故显式设大值。 */
+export const MAX_OUTPUT_TOKENS = 8000;
 
 export interface SummaryServiceOptions {
   getSettings: () => PaperSettings;
@@ -69,6 +71,7 @@ export class SummaryService {
       const stream = await client.chat.completions.create({
         model,
         messages: buildSummaryMessages(paperTitle, kind, text, systemPrompt),
+        max_tokens: MAX_OUTPUT_TOKENS,
         stream: true,
       });
       let content = '';

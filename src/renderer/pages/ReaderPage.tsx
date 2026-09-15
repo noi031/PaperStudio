@@ -234,13 +234,13 @@ export function ReaderPage({
                 .join(' ')
                 .replace(/\s+/g, ' ');
               parts.push(text);
-              if (parts.join('\n').length > 60000) break;
+              if (parts.join('\n').length > 120000) break;
             } catch {
               // 单页提取失败不影响其余页
             }
           }
           if (cancelled) return;
-          setFullText(parts.join('\n').slice(0, 60000));
+          setFullText(parts.join('\n').slice(0, 120000));
         })();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));

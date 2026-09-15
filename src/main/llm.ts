@@ -17,6 +17,9 @@ export interface ChatMessage {
   content: string;
 }
 
+/** 输出 token 上限：不传时多数服务默认 4096，长文（总结/写作/方向建议）会被截断。 */
+export const MAX_OUTPUT_TOKENS = 8000;
+
 /** 非流式补全，返回完整文本。 */
 export async function chatText(s: PaperSettings, messages: ChatMessage[]): Promise<string> {
   requireSettings(s);
@@ -24,6 +27,7 @@ export async function chatText(s: PaperSettings, messages: ChatMessage[]): Promi
   const res = await client.chat.completions.create({
     model: s.llmModel,
     messages,
+    max_tokens: MAX_OUTPUT_TOKENS,
   });
   const text = res.choices[0]?.message?.content ?? '';
   if (!text) throw new Error('LLM 返回为空');
