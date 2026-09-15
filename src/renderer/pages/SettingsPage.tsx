@@ -58,6 +58,20 @@ export function SettingsPage() {
           onChange={(e) => setS({ ...s, llmContextWindow: Number(e.target.value) })}
         />
         <TextField
+          label="输入截断上限（字符）"
+          type="number"
+          value={s.llmMaxInputChars}
+          onChange={(e) => setS({ ...s, llmMaxInputChars: Number(e.target.value) })}
+          helperText="总结/写作等任务送入 LLM 的原文最大字符数（全文提取也按此截断）"
+        />
+        <TextField
+          label="输出 token 上限"
+          type="number"
+          value={s.llmMaxOutputTokens}
+          onChange={(e) => setS({ ...s, llmMaxOutputTokens: Number(e.target.value) })}
+          helperText="不传时多数服务默认 4096，长总结会被截断；DeepSeek 一般最大 8192"
+        />
+        <TextField
           label="存储目录（留空=PaperStudio/storage/papers，数据不落 C 盘）"
           value={s.storageDir}
           onChange={set('storageDir')}

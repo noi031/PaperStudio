@@ -5,9 +5,9 @@ import OpenAI from 'openai';
 import type { BrowserWindow } from 'electron';
 import type { PaperSettings, SummaryEvent, SummaryKind } from '../shared/types.js';
 
-/** 全文总结输入截断上限（防超上下文）。 */
+/** 全文总结输入截断上限（防超上下文）；可在设置页调整。 */
 export const MAX_INPUT_CHARS = 120000;
-/** 输出 token 上限：不传时多数服务默认 4096，长总结会被截断，故显式设大值。 */
+/** 输出 token 上限；可在设置页调整。 */
 export const MAX_OUTPUT_TOKENS = 8000;
 
 export interface SummaryServiceOptions {
@@ -22,13 +22,14 @@ export function buildSummaryMessages(
   kind: SummaryKind,
   text: string,
   system?: string,
+  maxInputChars: number = MAX_INPUT_CHARS,
 ): Array<{ role: 'system' | 'user'; content: string }> {
   const sys =
     system?.trim() ||
     (kind === 'selected'
       ? '你是论文精读助手。用户选中了一段论文原文，请用中文解释这段内容：它在讲什么、在论文中起什么作用、有哪些关键概念。保持简洁，分点输出。数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。'
       : '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分分点输出，语言为中文。数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。');
-  const clipped = text.length > MAX_INPUT_CHARS ? `${text.slice(0, MAX_INPUT_CHARS)}\n…（原文过长已截断）` : text;
+  const clipped = text.length > maxInputChars ? `${text.slice(0, maxInputChars)}\n…（原文过长已截断）` : text;
   return [
     { role: 'system', content: sys },
     { role: 'user', content: `论文标题：${paperTitle}\n\n${clipped}` },
@@ -70,8 +71,8 @@ export class SummaryService {
       const systemPrompt = kind === 'selected' ? settings.promptSummarySelected : settings.promptSummaryFull;
       const stream = await client.chat.completions.create({
         model,
-        messages: buildSummaryMessages(paperTitle, kind, text, systemPrompt),
-        max_tokens: MAX_OUTPUT_TOKENS,
+        messages: buildSummaryMessages(paperTitle, kind, text, systemPrompt, settings.llmMaxInputChars),
+        max_tokens: settings.llmMaxOutputTokens || MAX_OUTPUT_TOKENS,
         stream: true,
       });
       let content = '';

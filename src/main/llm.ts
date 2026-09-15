@@ -27,7 +27,7 @@ export async function chatText(s: PaperSettings, messages: ChatMessage[]): Promi
   const res = await client.chat.completions.create({
     model: s.llmModel,
     messages,
-    max_tokens: MAX_OUTPUT_TOKENS,
+    max_tokens: s.llmMaxOutputTokens || MAX_OUTPUT_TOKENS,
   });
   const text = res.choices[0]?.message?.content ?? '';
   if (!text) throw new Error('LLM 返回为空');

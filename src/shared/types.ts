@@ -7,6 +7,10 @@ export interface PaperSettings {
   llmApiKey: string;
   llmModel: string;
   llmContextWindow: number;
+  /** 总结/写作等任务的输入截断上限（字符数，防超上下文）。 */
+  llmMaxInputChars: number;
+  /** LLM 输出 token 上限（不传时多数服务默认 4096，长总结会被截断）。 */
+  llmMaxOutputTokens: number;
   echoMemEnabled: boolean;
   echoMemEndpoint: string;
   echoMemAgentId: string;
@@ -29,6 +33,8 @@ export const DEFAULT_SETTINGS: PaperSettings = {
   llmApiKey: '',
   llmModel: 'deepseek-v4-flash',
   llmContextWindow: 128000,
+  llmMaxInputChars: 120000,
+  llmMaxOutputTokens: 8000,
   echoMemEnabled: false,
   echoMemEndpoint: 'http://127.0.0.1:8010',
   echoMemAgentId: 'paperstudio',

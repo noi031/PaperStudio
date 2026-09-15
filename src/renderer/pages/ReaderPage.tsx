@@ -220,8 +220,15 @@ export function ReaderPage({
         setLoading(false);
 
         // 提取全文（供全文总结）：后台串行提取（pdfjs worker 内部串行，并发会打崩 worker），
-        // 提取完成后「总结全文」按钮才可用。
+        // 提取完成后「总结全文」按钮才可用。截断上限取设置（默认 120000 字符）。
         void (async () => {
+          let maxChars = 120000;
+          try {
+            const st = (await window.paper.invoke('settings:get')) as { llmMaxInputChars?: number };
+            if (st && typeof st.llmMaxInputChars === 'number' && st.llmMaxInputChars > 0) maxChars = st.llmMaxInputChars;
+          } catch {
+            // 取设置失败用默认值
+          }
           const parts: string[] = [];
           const maxPages = Math.min(doc.numPages, 100);
           for (let i = 1; i <= maxPages; i++) {
@@ -234,13 +241,13 @@ export function ReaderPage({
                 .join(' ')
                 .replace(/\s+/g, ' ');
               parts.push(text);
-              if (parts.join('\n').length > 120000) break;
+              if (parts.join('\n').length > maxChars) break;
             } catch {
               // 单页提取失败不影响其余页
             }
           }
           if (cancelled) return;
-          setFullText(parts.join('\n').slice(0, 120000));
+          setFullText(parts.join('\n').slice(0, maxChars));
         })();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
