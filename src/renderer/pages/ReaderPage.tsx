@@ -411,14 +411,29 @@ export function ReaderPage({
       if (!range.intersectsNode(span)) continue;
       const spanEl = span as HTMLElement;
       const spanRect = spanEl.getBoundingClientRect();
-      // 字形带（canvas 像素级）：相对页顶的内容坐标；失败则用 span 盒
-      let bandTop = spanRect.top - crect.top + container.scrollTop;
+      // 字形带（canvas 像素级）；失败则用 span 盒。canvas 位图可能被 CSS 压缩
+      // 显示（位图高 ≠ canvas CSS 高），用户看到的字形按压缩比例渲染，高亮需
+      // 乘压缩因子对齐视觉字形，否则页面越靠下偏移越大。
+      const pageDiv = spanEl.closest('.page') as HTMLElement | null;
+      const canvasEl = pageDiv?.querySelector('canvas') as HTMLCanvasElement | null;
+      const crectC = canvasEl?.getBoundingClientRect();
+      const compressX =
+        crectC && crectC.width > 0 && canvasEl && canvasEl.width > 0 ? crectC.width / canvasEl.width : 1;
+      const compressY =
+        crectC && crectC.height > 0 && canvasEl && canvasEl.height > 0 ? crectC.height / canvasEl.height : 1;
+      const canvasLeft = crectC ? crectC.left : spanRect.left;
+      const canvasTop = crectC ? crectC.top : spanRect.top;
+      let bandTop = (spanRect.top - canvasTop) * compressY + canvasTop - crect.top + container.scrollTop;
       let bandHeight = spanRect.height;
       const band = measureGlyphBand(spanEl);
       if (band) {
-        const pageRect = (spanEl.closest('.page') as HTMLElement).getBoundingClientRect();
-        bandTop = band.top + pageRect.top - crect.top + container.scrollTop;
-        bandHeight = band.height;
+        const pageRect = pageDiv ? pageDiv.getBoundingClientRect() : null;
+        const textLayerEl = spanEl.closest('.textLayer') as HTMLElement | null;
+        const tlRect = textLayerEl?.getBoundingClientRect();
+        const tlRelTop = tlRect && pageRect ? tlRect.top - pageRect.top : 0; // canvas 顶部相对页面
+        const bitY = band.top - tlRelTop; // band 的位图 y（相对 canvas 位图顶部）
+        bandTop = canvasTop + bitY * compressY - crect.top + container.scrollTop;
+        bandHeight = band.height * compressY;
       }
       // 逐文本节点求 range ∩ 文本节点的子 range。关键：子 range 的起点/终点必须
       // 落在文本节点内部（offset 为字符偏移）——若端点是 span 元素节点，
@@ -446,10 +461,11 @@ export function ReaderPage({
         sub.setEnd(tn, e);
         for (const r of sub.getClientRects()) {
           if (r.width === 0 || r.height === 0) continue;
+          // x 方向同样受 canvas 压缩影响（位图宽 ≠ CSS 宽），压缩对齐视觉字形
           draw(
-            r.left - crect.left + container.scrollLeft,
+            (r.left - canvasLeft) * compressX + canvasLeft - crect.left + container.scrollLeft,
             bandTop,
-            r.width,
+            r.width * compressX,
             bandHeight,
           );
         }
