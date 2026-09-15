@@ -122,7 +122,7 @@ export function ReaderPage({
   const [title, setTitle] = useState('');
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(0);
-  const [scale, setScale] = useState(1.4);
+  const [scale, setScale] = useState(1.0);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedText, setSelectedText] = useState('');
@@ -854,7 +854,7 @@ export function ReaderPage({
                   原文（第 {editingNote?.page} 页）：{latexToText(editingNote?.text ?? '')}
                 </Typography>
                 <Box>
-                  <InputLabel size="small">类型</InputLabel>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>类型</Typography>
                   <Select
                     size="small"
                     fullWidth
