@@ -115,6 +115,9 @@ export function ReaderPage({
   const viewerRef = useRef<InstanceType<typeof import('pdfjs-dist/web/pdf_viewer').PDFViewer> | null>(null);
   const eventBusRef = useRef<InstanceType<typeof import('pdfjs-dist/web/pdf_viewer').EventBus> | null>(null);
   const notesRef = useRef<NoteRecord[]>([]);
+  // 最近一次鼠标位置：拖选经过 span 间空隙时 Chromium 会把选区端点钉在
+  // textLayer 容器（DIV）上导致跳行，需要用它 + caretPositionFromPoint 归位。
+  const lastMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const [title, setTitle] = useState('');
   const [pageNum, setPageNum] = useState(1);
@@ -285,23 +288,27 @@ export function ReaderPage({
   // 扫描 span 所在页 canvas 的对应行，找字形（黑色像素带）的精确 top/height。
   // span 盒（em 盒）比字形视觉高度高 ~30%，直接用它画高亮会在字下方留白，
   // 用户反馈「高亮不到字的下沿」——这里用 canvas 像素级字形带贴合。
+  // 坐标基准：canvas 位图像素与 textLayer CSS 是 1:1（同高），但 canvas 的
+  // CSS 显示尺寸可能被压缩（位图 ≠ CSS 尺寸），因此必须用 textLayer 的 rect
+  // 换算，不能用 canvas 的 getBoundingClientRect（否则滚动后扫描窗口错位）。
   const measureGlyphBand = useCallback((span: HTMLElement): { top: number; height: number } | null => {
     const cached = glyphBandCacheRef.current.get(span);
     const fontSize = getComputedStyle(span).fontSize;
     if (cached && cached.fontSize === fontSize) return cached;
     const pageDiv = span.closest('.page') as HTMLElement | null;
     const canvas = pageDiv?.querySelector('canvas') as HTMLCanvasElement | null;
-    if (!pageDiv || !canvas) return null;
-    const crect = canvas.getBoundingClientRect();
+    const textLayer = span.closest('.textLayer') as HTMLElement | null;
+    if (!pageDiv || !canvas || !textLayer) return null;
     const pageRect = pageDiv.getBoundingClientRect();
+    const tlRect = textLayer.getBoundingClientRect();
     const spanRect = span.getBoundingClientRect();
-    if (crect.width <= 0 || crect.height <= 0) return null;
-    const dprX = canvas.width / crect.width;
-    const dprY = canvas.height / crect.height;
-    const x0 = Math.max(0, Math.round((spanRect.left - crect.left) * dprX));
-    const x1 = Math.min(canvas.width, Math.round((spanRect.right - crect.left) * dprX));
-    const y0 = Math.max(0, Math.round((spanRect.top - crect.top) * dprY) - 8);
-    const y1 = Math.min(canvas.height, Math.round((spanRect.bottom - crect.top) * dprY) + 8);
+    if (tlRect.width <= 0 || tlRect.height <= 0) return null;
+    const dprX = canvas.width / tlRect.width;
+    const dprY = canvas.height / tlRect.height;
+    const x0 = Math.max(0, Math.round((spanRect.left - tlRect.left) * dprX));
+    const x1 = Math.min(canvas.width, Math.round((spanRect.right - tlRect.left) * dprX));
+    const y0 = Math.max(0, Math.round((spanRect.top - tlRect.top) * dprY) - 8);
+    const y1 = Math.min(canvas.height, Math.round((spanRect.bottom - tlRect.top) * dprY) + 8);
     if (x1 - x0 < 8 || y1 - y0 < 8) return null;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
@@ -345,7 +352,7 @@ export function ReaderPage({
     }
     if (bestStart < 0 || bestLen < 4) return null;
     const res = {
-      top: (y0 + bestStart) / dprY + crect.top - pageRect.top,
+      top: (y0 + bestStart) / dprY + tlRect.top - pageRect.top,
       height: bestLen / dprY,
       fontSize,
     };
@@ -368,19 +375,30 @@ export function ReaderPage({
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
-    // 只处理文本层内的选区（侧栏等处的选区不画）
+    // 只处理文本层内的选区（侧栏等处的选区不画）；选区可跨页（连续滚动下
+    // 起点在第 N 页、终点在第 N+1 页），两端任一在文本层内即可。
+    let inTextLayer = false;
     let node: Node | null = range.startContainer;
-    let textLayer: HTMLElement | null = null;
     while (node && node !== document.body) {
       if (node instanceof HTMLElement && node.classList.contains('textLayer')) {
-        textLayer = node;
+        inTextLayer = true;
         break;
       }
       node = node.parentNode;
     }
-    if (!textLayer) return;
+    if (!inTextLayer) {
+      node = range.endContainer;
+      while (node && node !== document.body) {
+        if (node instanceof HTMLElement && node.classList.contains('textLayer')) {
+          inTextLayer = true;
+          break;
+        }
+        node = node.parentNode;
+      }
+    }
+    if (!inTextLayer) return;
     const crect = container.getBoundingClientRect();
-    const spans = Array.from(textLayer.querySelectorAll('span'));
+    const spans = Array.from(document.querySelectorAll('.textLayer span'));
     // 坐标：overlay 是容器（滚动容器）的 absolute 子元素，会随内容滚动，
     // 因此把视口坐标转成「内容坐标」= 视口坐标 - 容器左上 + scrollLeft/scrollTop。
     const draw = (left: number, top: number, width: number, height: number) => {
@@ -391,13 +409,14 @@ export function ReaderPage({
     };
     for (const span of spans) {
       if (!range.intersectsNode(span)) continue;
-      const spanRect = span.getBoundingClientRect();
+      const spanEl = span as HTMLElement;
+      const spanRect = spanEl.getBoundingClientRect();
       // 字形带（canvas 像素级）：相对页顶的内容坐标；失败则用 span 盒
       let bandTop = spanRect.top - crect.top + container.scrollTop;
       let bandHeight = spanRect.height;
-      const band = measureGlyphBand(span);
+      const band = measureGlyphBand(spanEl);
       if (band) {
-        const pageRect = (span.closest('.page') as HTMLElement).getBoundingClientRect();
+        const pageRect = (spanEl.closest('.page') as HTMLElement).getBoundingClientRect();
         bandTop = band.top + pageRect.top - crect.top + container.scrollTop;
         bandHeight = band.height;
       }
@@ -407,7 +426,7 @@ export function ReaderPage({
       // 首尾行只选中一部分也整行高亮。
       // 裁剪偏移用节点关系判断（不用 compareBoundaryPoints——其返回值方向
       // 在不同 Chromium 版本表现不一致，曾导致合法相交被误跳过）。
-      const children = Array.from(span.childNodes);
+      const children = Array.from(spanEl.childNodes);
       for (let ci = 0; ci < children.length; ci++) {
         const child = children[ci];
         if (child.nodeType !== Node.TEXT_NODE) continue;
@@ -438,18 +457,103 @@ export function ReaderPage({
     }
   }, [measureGlyphBand]);
 
+  // 修复「跳行」：拖选多行时鼠标经过 span 间的空隙（行间 10px 空隙、
+  // 公式碎片间的大空隙），Chromium 会把选区端点钉在 textLayer 容器
+  // （DIV 元素）上，选区瞬间变成「从容器开头/某子节点边界」，表现为
+  // 某些行被整个跳过、且后续 mouseMove 不再恢复。
+  // 检测端点是 textLayer 容器时，把端点归位到鼠标附近最近的真实文本：
+  // 优先 caretPositionFromPoint（鼠标在文本上时直接命中），失败时
+  // （空隙处它可能返回非文本层 DIV，视口外返回 null）用最近 span 兜底。
+  const fixDivEndpointSelection = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const mouse = lastMouseRef.current;
+    if (mouse.x === 0 && mouse.y === 0) return;
+    const isTextLayerDiv = (node: Node | null): boolean =>
+      !!node && node instanceof HTMLElement && node.classList.contains('textLayer');
+    const isInsideTextLayer = (node: Node | null): boolean => {
+      let n: Node | null = node;
+      while (n && n !== document.body) {
+        if (n instanceof HTMLElement && n.classList.contains('textLayer')) return true;
+        n = n.parentNode;
+      }
+      return false;
+    };
+    // 找离鼠标最近的 span（按点到盒的距离），把鼠标 clamp 进盒内再取 caret
+    const applyNear = (textLayer: HTMLElement, apply: (n: Node, o: number) => void): boolean => {
+      let best: HTMLElement | null = null;
+      let bestD = Infinity;
+      for (const span of Array.from(textLayer.querySelectorAll('span'))) {
+        const r = span.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const dx = mouse.x < r.left ? r.left - mouse.x : mouse.x > r.right ? mouse.x - r.right : 0;
+        const dy = mouse.y < r.top ? r.top - mouse.y : mouse.y > r.bottom ? mouse.y - r.bottom : 0;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) {
+          bestD = d;
+          best = span;
+        }
+      }
+      if (!best) return false;
+      const r = best.getBoundingClientRect();
+      const cx = Math.min(r.right, Math.max(r.left, mouse.x));
+      const cy = Math.min(r.bottom, Math.max(r.top, mouse.y));
+      const cp = document.caretPositionFromPoint(cx, cy);
+      if (cp?.offsetNode && isInsideTextLayer(cp.offsetNode)) {
+        apply(cp.offsetNode, cp.offset);
+        return true;
+      }
+      const tns = Array.from(best.childNodes).filter((c) => c.nodeType === Node.TEXT_NODE) as Text[];
+      if (!tns.length) return false;
+      // caret 失败：归到 span 起/终点（鼠标在盒上半部 → 起点，否则终点）
+      const first = tns[0];
+      const last = tns[tns.length - 1];
+      if (mouse.y < r.top + r.height / 2) apply(first, 0);
+      else apply(last, last.length);
+      return true;
+    };
+    const set = (node: Node | null, offset: number, apply: (n: Node, o: number) => void): boolean => {
+      if (!isTextLayerDiv(node)) return false;
+      // 中间 offset（空隙处 Chromium 已把端点归到相邻 span 边界）语义合理，不修；
+      // 只有容器边缘（0 / 末尾）才导致「从容器开头算起」的跳变，需要归位。
+      const len = (node as HTMLElement).childNodes.length;
+      if (offset > 0 && offset < len) return false;
+      const cp = document.caretPositionFromPoint(mouse.x, mouse.y);
+      if (cp?.offsetNode && isInsideTextLayer(cp.offsetNode)) {
+        apply(cp.offsetNode, cp.offset);
+        return true;
+      }
+      return applyNear(node as HTMLElement, apply);
+    };
+    const changedStart = set(range.startContainer, range.startOffset, (n, o) => range.setStart(n, o));
+    const changedEnd = set(range.endContainer, range.endOffset, (n, o) => range.setEnd(n, o));
+    if (changedStart || changedEnd) {
+      sel.removeAllRanges();
+      sel.addRange(range); // 触发重入 selectionchange；此时端点已是文本/span，不再修复
+    }
+  }, []);
+
   // 监听选区变化 / 滚动，重绘精确选区高亮。
   // 注意：不用 rAF 节流——隐藏窗口/后台时 rAF 会被暂停导致高亮不更新。
   useEffect(() => {
     const container = viewerContainerRef.current;
-    const onSel = () => drawSelectionHighlight();
+    const onSel = () => {
+      fixDivEndpointSelection();
+      drawSelectionHighlight();
+    };
+    const onMove = (e: MouseEvent) => {
+      lastMouseRef.current = { x: e.clientX, y: e.clientY };
+    };
     document.addEventListener('selectionchange', onSel);
+    window.addEventListener('mousemove', onMove);
     container?.addEventListener('scroll', onSel, { passive: true });
     return () => {
       document.removeEventListener('selectionchange', onSel);
+      window.removeEventListener('mousemove', onMove);
       container?.removeEventListener('scroll', onSel);
     };
-  }, [drawSelectionHighlight]);
+  }, [drawSelectionHighlight, fixDivEndpointSelection]);
 
   // 批注数据同步到 ref（渲染高亮用），并在变化后重放已渲染页的高亮。
   useEffect(() => {
