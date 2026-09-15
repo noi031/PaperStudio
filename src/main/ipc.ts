@@ -96,7 +96,7 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
 
   // ── P3 读的闭环 ───────────────────────────────────────────
   ipcMain.handle('search:run', async (_e, req: { query: string; limit?: number }) =>
-    search(req.query, req.limit ?? 10),
+    search(req.query, req.limit ?? 10, { s2ApiKey: getSettings().semanticScholarApiKey }),
   );
 
   ipcMain.handle('papers:list', () => papers.list());

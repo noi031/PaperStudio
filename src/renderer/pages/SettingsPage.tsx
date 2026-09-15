@@ -63,6 +63,13 @@ export function SettingsPage() {
           onChange={set('storageDir')}
         />
         <TextField
+          label="Semantic Scholar API Key（可选）"
+          type="password"
+          value={s.semanticScholarApiKey}
+          onChange={set('semanticScholarApiKey')}
+          helperText="检索页无 key 时 Semantic Scholar 限流很严（常报 429）；填 key（https://www.semanticscholar.org/product/api#api-key-form）可大幅提高额度"
+        />
+        <TextField
           label="EchoMem 端点（可选）"
           value={s.echoMemEndpoint}
           onChange={set('echoMemEndpoint')}

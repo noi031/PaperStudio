@@ -6,6 +6,39 @@ import type { PaperHit } from '../shared/types.js';
 
 const ARXIV_API = 'https://export.arxiv.org/api/query';
 const S2_API = 'https://api.semanticscholar.org/graph/v1/paper/search';
+// arXiv API 要求请求携带标识性 User-Agent，否则极易触发 429/403 限流。
+const UA = 'PaperStudio/1.0 (https://github.com/noi031/PaperStudio)';
+// arXiv 官方要求相邻请求间隔 ≥3 秒；连续搜索时排队等待，避免 429。
+let lastArxivAt = 0;
+
+async function fetchWithRetry(
+  url: string | URL,
+  init: RequestInit,
+  opts: { label: string; maxRetries?: number; retryable?: (status: number) => boolean },
+): Promise<Response> {
+  const maxRetries = opts.maxRetries ?? 2;
+  const retryable = opts.retryable ?? ((s: number) => s === 429 || s >= 500);
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(url, init);
+    if (!retryable(res.status)) return res;
+    lastErr = new Error(`${opts.label} HTTP ${res.status}`);
+    const ra = Number(res.headers.get('retry-after') ?? '0');
+    const waitMs = Math.max(ra * 1000, 3000) * (attempt + 1);
+    // eslint-disable-next-line no-console
+    console.log(`[search] ${opts.label} HTTP ${res.status}，${Math.round(waitMs / 1000)}s 后重试（第 ${attempt + 1} 次）`);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+  throw lastErr ?? new Error(`${opts.label} 失败`);
+}
+
+/** arXiv 最小请求间隔 3 秒（官方要求），不足则等待。 */
+async function throttleArxiv(): Promise<void> {
+  const now = Date.now();
+  const wait = 3000 - (now - lastArxivAt);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastArxivAt = Date.now();
+}
 
 /** 解析 arXiv Atom XML → PaperHit[]（纯函数）。 */
 export function parseArxivAtom(xml: string): PaperHit[] {
@@ -102,16 +135,17 @@ export function mergeHits(hits: PaperHit[]): PaperHit[] {
 }
 
 async function arxivSearch(query: string, limit: number): Promise<PaperHit[]> {
+  await throttleArxiv();
   const url = new URL(ARXIV_API);
   url.searchParams.set('search_query', `all:${query}`);
   url.searchParams.set('start', '0');
   url.searchParams.set('max_results', String(Math.min(limit, 20)));
-  const res = await fetch(url, { headers: { Accept: 'application/atom+xml' } });
+  const res = await fetchWithRetry(url, { headers: { Accept: 'application/atom+xml', 'User-Agent': UA } }, { label: 'arXiv' });
   if (!res.ok) throw new Error(`arXiv HTTP ${res.status}`);
   return parseArxivAtom(await res.text());
 }
 
-async function s2Search(query: string, limit: number): Promise<PaperHit[]> {
+async function s2Search(query: string, limit: number, apiKey?: string): Promise<PaperHit[]> {
   const url = new URL(S2_API);
   url.searchParams.set('query', query);
   url.searchParams.set('limit', String(Math.min(limit, 20)));
@@ -119,31 +153,49 @@ async function s2Search(query: string, limit: number): Promise<PaperHit[]> {
     'fields',
     'title,abstract,year,venue,authors,externalIds,openAccessPdf,url',
   );
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': UA };
+  if (apiKey) headers['x-api-key'] = apiKey;
+  const res = await fetchWithRetry(
+    url,
+    { headers },
+    { label: 'Semantic Scholar', maxRetries: 1 },
+  );
   if (!res.ok) throw new Error(`Semantic Scholar HTTP ${res.status}`);
   return parseS2Json(await res.json());
 }
 
+/** 把网络错误翻译成对用户友好的中文提示（429 限流最常见）。 */
+function friendly(err: unknown): string {
+  const m = err instanceof Error ? err.message : String(err);
+  if (m.includes('HTTP 429')) {
+    return `${m}：检索接口限流，请稍等片刻再试（通常 1 小时后自动解除）；若经常出现，可在设置页配置 Semantic Scholar API Key 或更换网络/代理节点`;
+  }
+  return m;
+}
+
 /** 并发查两源；单源失败不影响另一源（Promise.allSettled），失败原因以 warnings 返回。 */
-export async function search(query: string, limit = 10): Promise<{ hits: PaperHit[]; warnings: string[] }> {
-  const [arxiv, s2] = await Promise.allSettled([arxivSearch(query, limit), s2Search(query, limit)]);
+export async function search(
+  query: string,
+  limit = 10,
+  opts: { s2ApiKey?: string } = {},
+): Promise<{ hits: PaperHit[]; warnings: string[] }> {
+  const [arxiv, s2] = await Promise.allSettled([
+    arxivSearch(query, limit),
+    s2Search(query, limit, opts.s2ApiKey),
+  ]);
   const hits: PaperHit[] = [];
   const warnings: string[] = [];
   if (arxiv.status === 'fulfilled') hits.push(...arxiv.value);
-  else warnings.push(`arXiv 检索失败：${reason(arxiv.reason)}`);
+  else warnings.push(`arXiv 检索失败：${friendly(arxiv.reason)}`);
   if (s2.status === 'fulfilled') hits.push(...s2.value);
-  else warnings.push(`Semantic Scholar 检索失败：${reason(s2.reason)}（可能被限流，已回退到 arXiv 结果）`);
+  else warnings.push(`Semantic Scholar 检索失败：${friendly(s2.reason)}`);
   return { hits: mergeHits(hits), warnings };
-}
-
-function reason(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** 下载 PDF 到 dir/<safeName>.pdf；返回绝对路径。 */
 export async function downloadPdf(pdfUrl: string, dir: string, safeName: string): Promise<string> {
   fs.mkdirSync(dir, { recursive: true });
-  const res = await fetch(pdfUrl);
+  const res = await fetchWithRetry(pdfUrl, { headers: { 'User-Agent': UA } }, { label: 'PDF', maxRetries: 2 });
   if (!res.ok) throw new Error(`PDF HTTP ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
   const filePath = path.join(dir, safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`);

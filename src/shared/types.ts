@@ -18,6 +18,8 @@ export interface PaperSettings {
   promptSlides: string;
   promptOutline: string;
   promptSection: string;
+  /** Semantic Scholar API key（可选）：无 key 检索限流极严（429），配 key 可大幅提高额度。 */
+  semanticScholarApiKey: string;
 }
 
 export const DEFAULT_SETTINGS: PaperSettings = {
@@ -56,6 +58,7 @@ export const DEFAULT_SETTINGS: PaperSettings = {
     '必须用 LaTeX 源码输出：数学公式一律用标准 LaTeX 记号（如 $\\gamma$、$E = mc^2$、$\\frac{a}{b}$、$B^\\pm \\to D^0 K^\\pm$），' +
     '需要引用参考论文时用 \\cite{key}（key 格式为 ref1、ref2…，对应参考论文序号），列表用 itemize/enumerate，强调用 \\textbf{}。' +
     '只输出小节正文源码（不要 \\section{}、\\begin{document} 等外壳），第一行不要重复小节标题。',
+  semanticScholarApiKey: '',
 };
 
 export type IpcChannel =

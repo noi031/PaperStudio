@@ -11,7 +11,10 @@ async function arxivSearch(query: string, limit: number): Promise<Array<Record<s
   url.searchParams.set('search_query', `all:${query}`);
   url.searchParams.set('start', '0');
   url.searchParams.set('max_results', String(Math.min(limit, 20)));
-  const res = await fetch(url, { headers: { Accept: 'application/atom+xml' } });
+  // arXiv 要求标识性 User-Agent 且相邻请求 ≥3s，否则 429 限流。
+  const res = await fetch(url, {
+    headers: { Accept: 'application/atom+xml', 'User-Agent': 'PaperStudio/1.0 (https://github.com/noi031/PaperStudio)' },
+  });
   if (!res.ok) throw new Error(`arXiv HTTP ${res.status}`);
   const xml = await res.text();
   const items: Array<Record<string, string>> = [];

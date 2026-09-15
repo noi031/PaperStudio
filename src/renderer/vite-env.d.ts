@@ -12,9 +12,10 @@ declare module 'pdfjs-dist/web/pdf_viewer' {
     off(eventName: string, listener: (evt: unknown) => void): void;
   }
   export class PDFLinkService {
-    constructor(opts: { eventBus: EventBus });
+    constructor(opts: { eventBus: EventBus; externalLinkTarget?: number });
     setViewer(viewer: unknown): void;
   }
+  export const LinkTarget: { NONE: number; SELF: number; BLANK: number; PARENT: number; TOP: number };
   export class PDFViewer {
     constructor(opts: {
       container: HTMLElement;

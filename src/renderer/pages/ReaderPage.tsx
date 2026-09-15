@@ -188,7 +188,8 @@ export function ReaderPage({
         const viewerEl = viewerElRef.current;
         if (!container || !viewerEl) throw new Error('阅读器容器未就绪');
         const eventBus = new vmod.EventBus();
-        const linkService = new vmod.PDFLinkService({ eventBus });
+        // 论文内链接（外链 URL）用 target=_blank 打开新窗口，避免覆盖当前阅读页。
+        const linkService = new vmod.PDFLinkService({ eventBus, externalLinkTarget: vmod.LinkTarget.BLANK });
         const viewer = new vmod.PDFViewer({ container, viewer: viewerEl, eventBus, linkService });
         linkService.setViewer(viewer);
         viewerRef.current = viewer;

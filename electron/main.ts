@@ -1,5 +1,5 @@
 // Electron 主进程入口（薄壳）：创建窗口、注册 IPC、管理 DB 与 dsh 引擎生命周期。
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
@@ -94,6 +94,32 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // PDF 内链接（target=_blank）→ 新开应用内窗口加载目标网页，不覆盖阅读器；
+  // 新窗口里的链接再交系统浏览器。同时兜底阻止主窗口被任何导航覆盖。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    const child = new BrowserWindow({
+      width: 1200,
+      height: 850,
+      autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false },
+    });
+    void child.loadURL(url);
+    child.webContents.setWindowOpenHandler(({ url: u2 }) => {
+      void shell.openExternal(u2);
+      return { action: 'deny' };
+    });
+    return { action: 'deny' };
+  });
+  win.webContents.on('will-navigate', (e, url) => {
+    const current = win.webContents.getURL();
+    if (url === current) return;
+    const isLocal = url.startsWith('file://') || (devUrl && url.startsWith(devUrl));
+    if (!isLocal) {
+      e.preventDefault();
+      void shell.openExternal(url);
+    }
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
