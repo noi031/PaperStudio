@@ -306,6 +306,8 @@ export function ReaderPage({
     if (!textLayer) return;
     const crect = container.getBoundingClientRect();
     const spans = Array.from(textLayer.querySelectorAll('span'));
+    // 坐标：overlay 是容器（滚动容器）的 absolute 子元素，会随内容滚动，
+    // 因此把视口坐标转成「内容坐标」= 视口坐标 - 容器左上 + scrollLeft/scrollTop。
     const draw = (left: number, top: number, width: number, height: number) => {
       if (width <= 0 || height <= 0) return;
       const d = document.createElement('div');
@@ -329,7 +331,12 @@ export function ReaderPage({
       const spanRect = span.getBoundingClientRect();
       for (const r of sub.getClientRects()) {
         if (r.width === 0 || r.height === 0) continue;
-        draw(r.left - crect.left + container.scrollLeft, spanRect.top - crect.top + container.scrollTop, r.width, spanRect.height);
+        draw(
+          r.left - crect.left + container.scrollLeft,
+          spanRect.top - crect.top + container.scrollTop,
+          r.width,
+          spanRect.height,
+        );
       }
     }
   }, []);
