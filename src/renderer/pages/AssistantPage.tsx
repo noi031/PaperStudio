@@ -101,27 +101,40 @@ export function AssistantPage() {
   const [input, setInput] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
 
-  const { currentId, sessions, messages, streaming, status, health, pendingContext, error } = store;
+  const { currentId, sessions, messages, streaming, status, health, pendingQuotes, error } = store;
 
   // 挂载：健康检查 + 会话列表 + 事件订阅。
   useEffect(() => {
     void store.loadHealth();
     void store.loadSessions();
     const off = window.paper.onAgentEvent((payload) => store.handleAgentEvent(payload));
-    return off;
+    // 全局 Esc 打断正在生成的回复
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        const st = useAssistantStore.getState();
+        if (st.currentId && (st.status[st.currentId] ?? 'idle') === 'running') {
+          void st.stop();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      off();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 来自其他页面的「发送到助手」上下文：自动建会话并注入。
+  // 来自其他页面的「发送到助手」引用块：确保存在会话（引用块待发送，可继续追加问题）。
   useEffect(() => {
-    if (pendingContext) {
-      const ctx = pendingContext;
-      void store.createSession(`来自${ctx.source}`, ctx.text).then(() => {
-        store.setPendingContext(null);
+    if (pendingQuotes.length > 0 && !currentId) {
+      const q = pendingQuotes[0];
+      void store.createSession(`来自${q.source}`, '').then(() => {
+        // 不自动发送：用户可在输入框继续补充问题后一次性发出（引用块由 send() 合并）。
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingContext]);
+  }, [pendingQuotes, currentId]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
@@ -129,9 +142,14 @@ export function AssistantPage() {
 
   const send = () => {
     const text = input.trim();
-    if (!text || !currentId) return;
+    if ((!text && pendingQuotes.length === 0) || !currentId) return;
+    // 引用块 + 用户追加的问题合并成一条消息一次性发出。
+    const quoteText = pendingQuotes
+      .map((q) => `@${q.source}（第 ${q.page} 页）：\n${q.text}`)
+      .join('\n\n---\n\n');
+    const combined = quoteText ? (text ? `${quoteText}\n\n${text}` : quoteText) : text;
     setInput('');
-    void store.send(text);
+    void store.send(combined);
   };
 
   const curMessages = currentId ? (messages[currentId] ?? []) : [];
@@ -237,6 +255,32 @@ export function AssistantPage() {
         </Box>
         <Divider />
         <Box sx={{ p: 1.5 }}>
+          {pendingQuotes.length > 0 && (
+            <Box sx={{ mb: 1 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                📌 已引用 {pendingQuotes.length} 处，可继续输入问题后一并发送：
+              </Typography>
+              <Stack spacing={0.5}>
+                {pendingQuotes.map((q) => (
+                  <Paper key={q.id} variant="outlined" sx={{ p: 1, bgcolor: 'info.light' }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>
+                          @{q.source}（第 {q.page} 页）
+                        </Typography>
+                        <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
+                          {q.text.slice(0, 200)}{q.text.length > 200 ? '…' : ''}
+                        </Typography>
+                      </Box>
+                      <IconButton size="small" onClick={() => store.removeQuote(q.id)}>
+                        <DeleteOutlinedIcon fontSize="small" />
+                      </IconButton>
+                    </Stack>
+                  </Paper>
+                ))}
+              </Stack>
+            </Box>
+          )}
           <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
             <Button size="small" variant="outlined" onClick={() => void store.createSession()}>
               新对话
@@ -259,7 +303,11 @@ export function AssistantPage() {
               multiline
               maxRows={6}
               placeholder={
-                isRunning ? 'dsh 引擎正在处理…' : '输入消息，或 /new 新会话 /resume 继续 /compact 压缩'
+                isRunning
+                  ? 'dsh 引擎正在处理…（按 Esc 可打断）'
+                  : pendingQuotes.length > 0
+                    ? '继续输入你的问题，与引用一起发送（Enter 发送，Shift+Enter 换行）…'
+                    : '输入消息，或 /new 新会话 /resume 继续 /compact 压缩'
               }
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -268,10 +316,13 @@ export function AssistantPage() {
                   e.preventDefault();
                   send();
                 }
+                if (e.key === 'Escape' && isRunning) {
+                  void store.stop();
+                }
               }}
               disabled={isRunning || !currentId}
             />
-            <IconButton color="primary" onClick={send} disabled={isRunning || !currentId || !input.trim()}>
+            <IconButton color="primary" onClick={send} disabled={isRunning || !currentId || (!input.trim() && pendingQuotes.length === 0)}>
               <SendIcon />
             </IconButton>
           </Stack>

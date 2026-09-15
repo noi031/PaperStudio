@@ -13,11 +13,20 @@ import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
 import TextField from '@mui/material/TextField';
 import IconButton from '@mui/material/IconButton';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
+import MenuItem from '@mui/material/MenuItem';
+import Select from '@mui/material/Select';
+import InputLabel from '@mui/material/InputLabel';
+import Tooltip from '@mui/material/Tooltip';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import { useLibraryStore } from '../store/libraryStore';
 import { useAssistantStore } from '../store/assistantStore';
-import type { SummaryRecord, NoteRecord } from '../../shared/types';
+import type { SummaryRecord, NoteRecord, NoteType } from '../../shared/types';
 import { latexToText } from '../../shared/latex';
 
 // pdfjs 主进程/渲染进程共用；Vite 下 worker 用 ?url 加载。
@@ -97,7 +106,7 @@ export function ReaderPage({
   onBack: () => void;
   onOpenAssistant: () => void;
 }) {
-  const { summaries, streaming, notes, loadSummaries, loadNotes, addNote, deleteNote, startSummary, handleSummaryEvent } =
+  const { summaries, streaming, notes, loadSummaries, loadNotes, addNote, updateNote, deleteNote, startSummary, handleSummaryEvent } =
     useLibraryStore();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -114,6 +123,13 @@ export function ReaderPage({
   const [fullText, setFullText] = useState('');
   const [commentDraft, setCommentDraft] = useState('');
   const [showCommentInput, setShowCommentInput] = useState(false);
+  // 批注编辑对话框
+  const [editingNote, setEditingNote] = useState<NoteRecord | null>(null);
+  const [editType, setEditType] = useState<NoteType>('comment');
+  const [editContent, setEditContent] = useState('');
+  // 批注导出/导入
+  const [noteMsg, setNoteMsg] = useState<string | null>(null);
+  const noteImportRef = useRef<HTMLInputElement>(null);
 
   const docRef = useRef<{ doc: import('pdfjs-dist').PDFDocumentProxy; data: Uint8Array } | null>(null);
 
@@ -274,11 +290,54 @@ export function ReaderPage({
     });
   };
 
+  const openEditNote = (n: NoteRecord) => {
+    setEditingNote(n);
+    setEditType(n.type);
+    setEditContent(n.content);
+  };
+
+  const saveEditNote = () => {
+    if (!editingNote) return;
+    void updateNote(editingNote.id, { type: editType, content: editContent.trim() }).then(() => {
+      setEditingNote(null);
+      if (paperId) void loadNotes(paperId);
+    });
+  };
+
+  const handleExportNotes = () => {
+    if (!paperId) return;
+    void window.paper
+      .invoke('notes:export', { paperId })
+      .then((r) => {
+        const res = r as { ok: boolean; path?: string; message?: string };
+        setNoteMsg(res.ok ? `已导出：${res.path}` : `导出失败：${res.message ?? ''}`);
+      });
+  };
+
+  const handleImportNotesFile = (file: File) => {
+    if (!paperId) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      void window.paper
+        .invoke('notes:import', { paperId, json: String(reader.result ?? '') })
+        .then(async (r) => {
+          const res = r as { ok: boolean; imported?: number; message?: string };
+          setNoteMsg(res.ok ? `已导入 ${res.imported ?? 0} 条批注` : `导入失败：${res.message ?? ''}`);
+          if (res.ok) await loadNotes(paperId);
+        });
+    };
+    reader.readAsText(file);
+  };
+
   const handleSendToAssistant = () => {
     if (!selectedText) return;
-    useAssistantStore
-      .getState()
-      .setPendingContext({ source: `阅读器：${title || '论文'}`, text: `论文：${title}\n\n选中段落（第 ${pageNum} 页）：\n${selectedText}` });
+    // @ 引用块：把选中段落加入助手待发引用列表，可继续在对话里追加问题后一次性发出。
+    useAssistantStore.getState().appendQuote({
+      source: title || '论文',
+      page: pageNum,
+      text: selectedText,
+    });
+    setSelectedText('');
     onOpenAssistant();
   };
 
@@ -375,7 +434,28 @@ export function ReaderPage({
           ))}
 
           <Divider />
-          <Typography variant="subtitle2">批注</Typography>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 0.5 }}>
+            <Typography variant="subtitle2" sx={{ fontSize: 12 }}>批注</Typography>
+            <Box sx={{ flexGrow: 1 }} />
+            <Button size="small" variant="outlined" onClick={handleExportNotes}>导出</Button>
+            <Button size="small" variant="outlined" onClick={() => noteImportRef.current?.click()}>导入</Button>
+            <input
+              ref={noteImportRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleImportNotesFile(f);
+                e.target.value = '';
+              }}
+            />
+          </Stack>
+          {noteMsg && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, wordBreak: 'break-all' }}>
+              {noteMsg}
+            </Typography>
+          )}
           {selectedText && (
             <>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', maxHeight: 48, overflow: 'auto' }}>
@@ -414,9 +494,16 @@ export function ReaderPage({
             {paperNotes.map((n) => (
               <ListItem key={n.id} alignItems="flex-start" disableGutters
                 secondaryAction={
-                  <IconButton edge="end" size="small" onClick={() => handleDeleteNote(n.id)}>
-                    <DeleteOutlinedIcon fontSize="small" />
-                  </IconButton>
+                  <Stack direction="row" spacing={0}>
+                    <Tooltip title={`跳转到第 ${n.page} 页`}>
+                      <IconButton edge="end" size="small" onClick={() => void goto(n.page)}>
+                        <OpenInNewIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <IconButton edge="end" size="small" onClick={() => handleDeleteNote(n.id)}>
+                      <DeleteOutlinedIcon fontSize="small" />
+                    </IconButton>
+                  </Stack>
                 }
               >
                 <ListItemText
@@ -438,12 +525,48 @@ export function ReaderPage({
                       )}
                     </>
                   }
-                  onClick={() => void goto(n.page)}
+                  onClick={() => openEditNote(n)}
                   sx={{ cursor: 'pointer' }}
                 />
               </ListItem>
             ))}
           </List>
+
+          {/* 批注编辑对话框 */}
+          <Dialog open={editingNote !== null} onClose={() => setEditingNote(null)} fullWidth maxWidth="sm">
+            <DialogTitle>编辑批注</DialogTitle>
+            <DialogContent>
+              <Stack spacing={1.5} sx={{ mt: 1 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'pre-wrap' }}>
+                  原文（第 {editingNote?.page} 页）：{latexToText(editingNote?.text ?? '')}
+                </Typography>
+                <Box>
+                  <InputLabel size="small">类型</InputLabel>
+                  <Select
+                    size="small"
+                    fullWidth
+                    value={editType}
+                    onChange={(e) => setEditType(e.target.value as NoteType)}
+                  >
+                    <MenuItem value="comment">批注（评论）</MenuItem>
+                    <MenuItem value="highlight">高亮</MenuItem>
+                  </Select>
+                </Box>
+                <TextField
+                  label="批注内容"
+                  multiline
+                  minRows={3}
+                  fullWidth
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                />
+              </Stack>
+            </DialogContent>
+            <DialogActions>
+              <Button size="small" onClick={() => setEditingNote(null)}>取消</Button>
+              <Button size="small" variant="contained" onClick={saveEditNote}>保存</Button>
+            </DialogActions>
+          </Dialog>
 
           <Divider />
           <Typography variant="subtitle2">历史总结</Typography>

@@ -1,9 +1,12 @@
-// AI 助手页状态：会话列表、消息、流式缓冲、跨页发送到助手上下文。
+// AI 助手页状态：会话列表、消息、流式缓冲、跨页引用块（@段落 → 一次性发出）。
 import { create } from 'zustand';
 import type { AgentMessageLite, AgentSessionLite } from '../../shared/types';
 
-export interface PendingContext {
+/** 跨页引用块：阅读器选中的段落（@引用），发送时与用户追加的问题合并成一条消息。 */
+export interface PendingQuote {
+  id: string;
   source: string;
+  page: number;
   text: string;
 }
 
@@ -21,7 +24,7 @@ export interface AssistantStore {
   messages: Record<string, AgentMessageLite[]>;
   streaming: Record<string, StreamingState>;
   status: Record<string, 'idle' | 'running'>;
-  pendingContext: PendingContext | null;
+  pendingQuotes: PendingQuote[];
   error: string | null;
   loadHealth: () => Promise<void>;
   loadSessions: (selectId?: string) => Promise<void>;
@@ -29,14 +32,19 @@ export interface AssistantStore {
   deleteSession: (id: string) => Promise<void>;
   selectSession: (id: string) => void;
   send: (text: string) => Promise<void>;
-  setPendingContext: (ctx: PendingContext | null) => void;
+  stop: (id?: string) => Promise<void>;
+  appendQuote: (q: Omit<PendingQuote, 'id'>) => void;
+  removeQuote: (id: string) => void;
+  clearQuotes: () => void;
   handleAgentEvent: (payload: unknown) => void;
 }
 
 // 模块级 in-flight 去重：React StrictMode 下 effect 双执行（挂载→卸载→再挂载），
-// AssistantPage 的 pendingContext effect 会连续调用两次 createSession；
+// AssistantPage 的 pendingQuotes effect 会连续调用两次 createSession；
 // 若并发创建（第一次还没返回），第二次直接复用同一个 promise，避免「一个上下文建两个会话」。
 let creatingSession: Promise<AgentSessionLite | null> | null = null;
+
+let quoteSeq = 0;
 
 export const useAssistantStore = create<AssistantStore>((set, get) => ({
   health: null,
@@ -45,7 +53,7 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
   messages: {},
   streaming: {},
   status: {},
-  pendingContext: null,
+  pendingQuotes: [],
   error: null,
 
   loadHealth: async () => {
@@ -100,16 +108,38 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
   send: async (text) => {
     const { currentId } = get();
     if (!currentId) return;
-    set({ pendingContext: null, error: null });
+    set({ error: null });
     try {
       await window.paper.invoke('agent:sendMessage', { id: currentId, text });
+      // 发送成功即清空引用块（连同输入框内容，由页面处理）
+      set({ pendingQuotes: [] });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       set({ error: message.replace(/^Error invoking remote method '[^']+': /, '') });
     }
   },
 
-  setPendingContext: (ctx) => set({ pendingContext: ctx }),
+  stop: async (id) => {
+    const { currentId } = get();
+    const target = id ?? currentId;
+    if (!target) return;
+    try {
+      await window.paper.invoke('agent:stop', { id: target });
+    } catch {
+      // 打断失败不阻塞 UI
+    }
+  },
+
+  appendQuote: (q) => {
+    quoteSeq += 1;
+    set((s) => ({ pendingQuotes: [...s.pendingQuotes, { ...q, id: `q${quoteSeq}` }] }));
+  },
+
+  removeQuote: (id) => {
+    set((s) => ({ pendingQuotes: s.pendingQuotes.filter((x) => x.id !== id) }));
+  },
+
+  clearQuotes: () => set({ pendingQuotes: [] }),
 
   handleAgentEvent: (payload) => {
     const evt = payload as {

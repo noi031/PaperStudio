@@ -11,6 +11,13 @@ export interface PaperSettings {
   echoMemEndpoint: string;
   echoMemAgentId: string;
   echoMemAuthKey: string;
+  /** 可编辑提示词模板（留空则用内置默认）。 */
+  promptSummarySelected: string;
+  promptSummaryFull: string;
+  promptDirections: string;
+  promptSlides: string;
+  promptOutline: string;
+  promptSection: string;
 }
 
 export const DEFAULT_SETTINGS: PaperSettings = {
@@ -24,6 +31,31 @@ export const DEFAULT_SETTINGS: PaperSettings = {
   echoMemEndpoint: 'http://127.0.0.1:8010',
   echoMemAgentId: 'paperstudio',
   echoMemAuthKey: '',
+  // 以下提示词与各服务内置默认一致；在设置页可覆盖（留空恢复默认）。
+  promptSummarySelected:
+    '你是论文精读助手。用户选中了一段论文原文，请用中文解释这段内容：它在讲什么、在论文中起什么作用、有哪些关键概念。保持简洁，分点输出。数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。',
+  promptSummaryFull:
+    '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分分点输出，语言为中文。数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。',
+  promptDirections:
+    '你是研究方向规划专家。基于用户给出的论文列表，提出 3-5 个有前景、可落地的研究方向。' +
+    '每个方向包含：title（简短标题）、description（1-3 句说明：为什么值得做、切入角度）、nextSteps（2-4 条具体下一步）。' +
+    '输出 JSON：{"suggestions":[{"title":"...","description":"...","nextSteps":["...","..."]}]}。' +
+    '数学公式一律用纯文本表达（如 γ、x²、B±→D），禁止使用任何 LaTeX 记号。',
+  promptSlides:
+    '你是演示文稿专家。根据论文信息生成 8-12 页幻灯片的提纲：第一页为标题页，最后一页为总结/展望。' +
+    '每页包含 title（短标题）与 bullets（3-5 条要点，每条一行、一页内放得下），可选 note（演讲备注）。' +
+    '输出 JSON 数组：[{"title":"...","bullets":["...","..."],"note":"..."}]。' +
+    '数学公式一律用纯文本表达（如 γ、x²、B±→D），禁止使用任何 LaTeX 记号。',
+  promptOutline:
+    '你是学术写作助手。用户会给出 1-N 篇参考论文（标题/作者/年份/摘要），请参考它们的结构与写作风格，' +
+    '为新论文生成 8-12 节大纲。每个小节给出 heading 与 description（该节要写什么、包含哪些小节）。' +
+    '输出 JSON 数组：[{"heading":"...","description":"..."}]。' +
+    'heading 用论文语言（中文或英文均可，保留必要术语），description 中数学公式可用 LaTeX 记号描述（如 $\\gamma$、$B^\\pm \\to D(K^0_S h^{\\prime +} h^{\\prime -}) h^\\pm$）。',
+  promptSection:
+    '你是学术写作助手。根据参考论文信息与大纲，为指定小节撰写 LaTeX 论文初稿：逻辑清晰、内容扎实，500-1200 字。' +
+    '必须用 LaTeX 源码输出：数学公式一律用标准 LaTeX 记号（如 $\\gamma$、$E = mc^2$、$\\frac{a}{b}$、$B^\\pm \\to D^0 K^\\pm$），' +
+    '需要引用参考论文时用 \\cite{key}（key 格式为 ref1、ref2…，对应参考论文序号），列表用 itemize/enumerate，强调用 \\textbf{}。' +
+    '只输出小节正文源码（不要 \\section{}、\\begin{document} 等外壳），第一行不要重复小节标题。',
 };
 
 export type IpcChannel =
@@ -36,6 +68,7 @@ export type IpcChannel =
   | 'agent:deleteSession'
   | 'agent:listMessages'
   | 'agent:sendMessage'
+  | 'agent:stop'
   | 'search:run'
   | 'papers:list'
   | 'papers:save'
@@ -46,7 +79,10 @@ export type IpcChannel =
   | 'summary:run'
   | 'notes:list'
   | 'notes:add'
+  | 'notes:update'
   | 'notes:delete'
+  | 'notes:export'
+  | 'notes:import'
   | 'directions:list'
   | 'directions:generate'
   | 'directions:delete'
@@ -88,6 +124,7 @@ export interface IpcContract {
   'agent:deleteSession': { req: { id: string }; res: void };
   'agent:listMessages': { req: { id: string }; res: AgentMessageLite[] };
   'agent:sendMessage': { req: { id: string; text: string }; res: { ok: boolean } };
+  'agent:stop': { req: { id: string }; res: void };
   'search:run': { req: { query: string; limit?: number }; res: { hits: PaperHit[]; warnings: string[] } };
   'papers:list': { req: void; res: PaperRecord[] };
   'papers:save': { req: { hit: PaperHit }; res: PaperRecord };
@@ -105,7 +142,19 @@ export interface IpcContract {
     req: { paperId: string; page: number; type: NoteType; text: string; content: string };
     res: NoteRecord;
   };
+  'notes:update': {
+    req: { id: string; content?: string; type?: NoteType; text?: string };
+    res: NoteRecord | null;
+  };
   'notes:delete': { req: { id: string }; res: void };
+  'notes:export': {
+    req: { paperId: string };
+    res: { ok: boolean; path?: string; imported?: number; message?: string };
+  };
+  'notes:import': {
+    req: { paperId: string; json: string };
+    res: { ok: boolean; path?: string; imported?: number; message?: string };
+  };
   // ── P5 方向建议 ──
   'directions:list': { req: void; res: DirectionRecord[] };
   'directions:generate': {

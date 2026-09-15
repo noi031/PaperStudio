@@ -36,7 +36,7 @@ beforeEach(() => {
     messages: {},
     streaming: {},
     status: {},
-    pendingContext: null,
+    pendingQuotes: [],
     error: null,
   });
 });

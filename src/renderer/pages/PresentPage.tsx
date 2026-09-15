@@ -8,7 +8,6 @@ import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
 import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
-import InputLabel from '@mui/material/InputLabel';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -57,10 +56,10 @@ export function PresentPage() {
       {/* 左：演示列表 */}
       <Paper variant="outlined" sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
         <Box sx={{ p: 1.5 }}>
-          <Typography variant="h6" gutterBottom>
+          <Typography variant="h6" gutterBottom sx={{ fontSize: 17 }}>
             演示
           </Typography>
-          <InputLabel size="small">选择论文新建演示</InputLabel>
+          <Typography variant="caption" color="text.secondary">选择论文新建演示</Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
             <Select size="small" value={paperId} onChange={(e) => setPaperId(e.target.value)} displayEmpty sx={{ flexGrow: 1 }}>
               <MenuItem value="" disabled>
@@ -129,8 +128,11 @@ export function PresentPage() {
         ) : (
           <Card variant="outlined">
             <CardContent>
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
-                <Typography variant="h6" sx={{ flexGrow: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1, flexWrap: 'wrap', rowGap: 1 }}>
+                <Typography
+                  variant="h6"
+                  sx={{ flexGrow: 1, minWidth: 120, fontSize: 17, lineHeight: 1.4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >
                   {current.title}
                 </Typography>
                 <Button

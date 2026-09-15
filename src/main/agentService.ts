@@ -190,6 +190,31 @@ export class AgentService {
     this.opts.getWindow()?.webContents.send('agent:event', payload);
   }
 
+  /**
+   * 打断当前回合（Esc）：先尝试通知 dsh 引擎 cancel，再清理本地流状态。
+   * 注意：本机 dsh SDK 协议白名单只有 initialize / session/prompt / shutdown，
+   * 无 session 级打断 RPC（session/cancel 仅存在于 UI 侧 client-connection 的
+   * fixture 实现），因此引擎侧旧回合无法真正终止——它会在后台自然跑完并
+   * 被丢弃（listener 已注销，不再转发）。这里保证的是：UI 立即停止展示、
+   * 状态复位、输入框恢复可用、可继续发新消息（新消息会在旧回合 idle 后执行）。
+   */
+  async stop(sessionId: string): Promise<void> {
+    const session = this.opts.repo.getSession(sessionId);
+    if (!session) return;
+    try {
+      await this.opts.host.cancel(session.dshSessionId);
+    } catch (err) {
+      // 本机引擎不支持 session/cancel：忽略错误，本地状态照常清理。
+      console.warn('[AgentService] cancel 失败（引擎可能不支持）:', err instanceof Error ? err.message : err);
+    }
+    this.streams.delete(sessionId);
+    this.streamOffs.get(sessionId)?.();
+    this.streamOffs.delete(sessionId);
+    // 通知渲染进程：回合被用户打断（收尾流式缓冲）。
+    this.emitToWindow({ type: 'status', sessionId, status: 'idle' });
+    this.emitToWindow({ type: 'finish', sessionId, reason: 'interrupted' });
+  }
+
   /** 关闭 dsh 引擎（应用退出时）。 */
   async dispose(): Promise<void> {
     this.started = false;

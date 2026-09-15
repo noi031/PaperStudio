@@ -28,6 +28,7 @@ interface LibraryStore {
   handleSummaryEvent: (evt: SummaryEvent) => void;
   loadNotes: (paperId: string) => Promise<void>;
   addNote: (paperId: string, page: number, type: NoteType, text: string, content: string) => Promise<void>;
+  updateNote: (id: string, patch: { content?: string; type?: NoteType; text?: string }) => Promise<void>;
   deleteNote: (id: string) => Promise<void>;
 }
 
@@ -125,6 +126,10 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   addNote: async (paperId, page, type, text, content) => {
     await window.paper.invoke('notes:add', { paperId, page, type, text, content });
     await get().loadNotes(paperId);
+  },
+
+  updateNote: async (id, patch) => {
+    await window.paper.invoke('notes:update', { id, ...patch });
   },
 
   deleteNote: async (id) => {

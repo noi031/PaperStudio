@@ -322,6 +322,11 @@ export class AgentHost {
     });
   }
 
+  /** 中断/取消 dsh 会话当前回合（wire: session/cancel）。 */
+  async cancel(dshSessionId: string): Promise<void> {
+    await this.request('session/cancel', { sessionId: dshSessionId });
+  }
+
   async close(): Promise<void> {
     const child = this.child;
     this.child = null;

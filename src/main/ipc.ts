@@ -1,4 +1,5 @@
 // 主进程 IPC 注册：所有通道集中在此，按阶段扩展。
+import path from 'node:path';
 import type { IpcMain } from 'electron';
 import type { Db } from './db';
 import type { PaperSettings } from '../shared/types.js';
@@ -89,6 +90,10 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     return { ok: true };
   });
 
+  ipcMain.handle('agent:stop', (_e, req: { id: string }) => {
+    void agent.stop(req.id);
+  });
+
   // ── P3 读的闭环 ───────────────────────────────────────────
   ipcMain.handle('search:run', async (_e, req: { query: string; limit?: number }) =>
     search(req.query, req.limit ?? 10),
@@ -142,8 +147,36 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
       notes.insert(req.paperId, req.page, req.type, req.text, req.content, db.getSettings().username || 'me'),
   );
 
+  ipcMain.handle('notes:update', (_e, req: { id: string; content?: string; type?: NoteType; text?: string }) =>
+    notes.update(req.id, req),
+  );
+
   ipcMain.handle('notes:delete', (_e, req: { id: string }) => {
     notes.remove(req.id);
+  });
+
+  ipcMain.handle('notes:export', (_e, req: { paperId: string }) => {
+    const p = papers.get(req.paperId);
+    if (!p) return { ok: false, message: '论文不存在' };
+    if (notes.countByPaper(req.paperId) === 0) return { ok: false, message: '该论文还没有批注' };
+    try {
+      const filePath = notes.exportJson(req.paperId, p.title, p.externalId, path.join(exportDir, 'notes'));
+      return { ok: true, path: filePath };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  ipcMain.handle('notes:import', (_e, req: { paperId: string; json: string }) => {
+    const p = papers.get(req.paperId);
+    if (!p) return { ok: false, message: '论文不存在，请先保存论文再导入' };
+    try {
+      const count = notes.importJson(req.json, req.paperId);
+      if (count === 0) return { ok: false, message: '文件中没有可导入的批注' };
+      return { ok: true, imported: count };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   // ── P5 方向建议 ───────────────────────────────────────────

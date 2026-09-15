@@ -11,11 +11,14 @@ const SLIDES_SYSTEM =
   '输出 JSON 数组：[{"title":"...","bullets":["...","..."],"note":"..."}]。' +
   '数学公式一律用纯文本表达（如 γ、x²、B±→D），禁止使用任何 LaTeX 记号。';
 
-/** 组装幻灯片提纲请求消息（纯函数，供单测）。 */
-export function buildSlidesMessages(paper: PaperRecord): Array<{ role: 'system' | 'user'; content: string }> {
+/** 组装幻灯片提纲请求消息（纯函数，供单测）。system 为空时用内置默认。 */
+export function buildSlidesMessages(
+  paper: PaperRecord,
+  system?: string,
+): Array<{ role: 'system' | 'user'; content: string }> {
   const abs = (paper.abstract ?? '').replace(/\s+/g, ' ').slice(0, 2000);
   return [
-    { role: 'system', content: SLIDES_SYSTEM },
+    { role: 'system', content: system?.trim() || SLIDES_SYSTEM },
     {
       role: 'user',
       content: `论文标题：${paper.title}\n作者：${paper.authors.join(', ') || '未知'}\n年份：${paper.year ?? '未知'}\n\n摘要：${abs || '（无）'}\n\n请生成幻灯片提纲。`,
@@ -27,7 +30,7 @@ export function buildSlidesMessages(paper: PaperRecord): Array<{ role: 'system' 
 export async function generateSlides(settings: PaperSettings, paper: PaperRecord): Promise<SlideItem[]> {
   const data = await chatJson<Array<{ title?: unknown; bullets?: unknown; note?: unknown }>>(
     settings,
-    buildSlidesMessages(paper),
+    buildSlidesMessages(paper, settings.promptSlides),
   );
   const slides = (Array.isArray(data) ? data : []).map((s) => ({
     title: String(s.title ?? '').trim(),

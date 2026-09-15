@@ -36,29 +36,33 @@ export function buildReferencesText(references: PaperRecord[], maxAbs = 600): st
   return lines.join('\n\n');
 }
 
-/** 组装大纲请求消息（纯函数，供单测）。 */
-export function buildOutlineMessages(opts: OutlineOptions): Array<{ role: 'system' | 'user'; content: string }> {
+/** 组装大纲请求消息（纯函数，供单测）。system 为空时用内置默认。 */
+export function buildOutlineMessages(
+  opts: OutlineOptions,
+  system?: string,
+): Array<{ role: 'system' | 'user'; content: string }> {
   const refs = opts.paper ? [opts.paper, ...opts.references.filter((r) => r.id !== opts.paper!.id)] : opts.references;
   const refText = refs.length > 0 ? buildReferencesText(refs) : '（无参考论文，请按通用学术论文结构生成大纲）';
   const target = opts.paper ? `要写的新论文主题：${opts.paper.title}\n` : '要写的新论文主题：（未指定，请生成通用学术论文大纲）';
   return [
-    { role: 'system', content: OUTLINE_SYSTEM },
+    { role: 'system', content: system?.trim() || OUTLINE_SYSTEM },
     { role: 'user', content: `${target}\n\n参考论文：\n${refText}\n\n请生成大纲。` },
   ];
 }
 
-/** 组装单节撰写请求消息（纯函数，供单测）。 */
+/** 组装单节撰写请求消息（纯函数，供单测）。system 为空时用内置默认。 */
 export function buildSectionMessages(
   opts: OutlineOptions,
   outline: DraftOutlineItem[],
   item: DraftOutlineItem,
+  system?: string,
 ): Array<{ role: 'system' | 'user'; content: string }> {
   const refs = opts.paper ? [opts.paper, ...opts.references.filter((r) => r.id !== opts.paper!.id)] : opts.references;
   const refText = refs.length > 0 ? buildReferencesText(refs, 400) : '（无参考论文）';
   const outlineText = outline.map((o, i) => `${i + 1}. ${o.heading}${o.description ? `：${o.description}` : ''}`).join('\n');
   const target = opts.paper ? `要写的新论文主题：${opts.paper.title}` : '要写的新论文主题：（未指定）';
   return [
-    { role: 'system', content: SECTION_SYSTEM },
+    { role: 'system', content: system?.trim() || SECTION_SYSTEM },
     {
       role: 'user',
       content: `${target}\n\n参考论文：\n${refText}\n\n大纲：\n${outlineText}\n\n请用 LaTeX 源码撰写第 ${outline.indexOf(item) + 1} 节「${item.heading}」的正文。`,
@@ -73,7 +77,7 @@ export async function generateOutline(
 ): Promise<DraftOutlineItem[]> {
   const data = await chatJson<Array<{ heading?: unknown; description?: unknown }>>(
     settings,
-    buildOutlineMessages(opts),
+    buildOutlineMessages(opts, settings.promptOutline),
   );
   const outline = (Array.isArray(data) ? data : []).map((o) => ({
     heading: String(o.heading ?? '').trim(),
@@ -91,7 +95,7 @@ export async function writeSection(
   outline: DraftOutlineItem[],
   item: DraftOutlineItem,
 ): Promise<string> {
-  const text = await chatText(settings, buildSectionMessages(opts, outline, item));
+  const text = await chatText(settings, buildSectionMessages(opts, outline, item, settings.promptSection));
   return text.trim();
 }
 

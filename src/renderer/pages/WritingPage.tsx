@@ -8,7 +8,6 @@ import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
 import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
-import InputLabel from '@mui/material/InputLabel';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -115,10 +114,10 @@ export function WritingPage() {
       {/* 左：草稿列表 */}
       <Paper variant="outlined" sx={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
         <Box sx={{ p: 1.5 }}>
-          <Typography variant="h6" gutterBottom>
+          <Typography variant="h6" gutterBottom sx={{ fontSize: 17 }}>
             写作
           </Typography>
-          <InputLabel size="small">选择论文新建草稿</InputLabel>
+          <Typography variant="caption" color="text.secondary">选择论文新建草稿</Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
             <Select size="small" value={paperId} onChange={(e) => setPaperId(e.target.value)} displayEmpty sx={{ flexGrow: 1 }}>
               <MenuItem value="" disabled>
@@ -134,9 +133,9 @@ export function WritingPage() {
               新建
             </Button>
           </Stack>
-          <InputLabel size="small" sx={{ mt: 1 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
             参考论文（写作格式/内容参考，可多选）
-          </InputLabel>
+          </Typography>
           <Select
             size="small"
             multiple
@@ -207,8 +206,11 @@ export function WritingPage() {
         ) : (
           <Card variant="outlined">
             <CardContent>
-              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
-                <Typography variant="h6" sx={{ flexGrow: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1, flexWrap: 'wrap', rowGap: 1 }}>
+                <Typography
+                  variant="h6"
+                  sx={{ flexGrow: 1, minWidth: 120, fontSize: 17, lineHeight: 1.4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >
                   {current.title}
                 </Typography>
                 <Button
@@ -281,9 +283,14 @@ export function WritingPage() {
                     const writingThis = sectionBusyKey === `${current.id}:${i}`;
                     return (
                       <Box key={i} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
-                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
                           <Chip size="small" label={`${i + 1}`} />
-                          <Typography variant="subtitle2">{latexToText(item.heading) || item.heading}</Typography>
+                          <Typography
+                            variant="subtitle2"
+                            sx={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}
+                          >
+                            {latexToText(item.heading) || item.heading}
+                          </Typography>
                           <Box sx={{ flexGrow: 1 }} />
                           <Button
                             size="small"
