@@ -278,13 +278,88 @@ export function ReaderPage({
     setSelectedText(sel);
   };
 
+  // 字形带测量缓存：span 元素 → { top, height }（相对所在页顶部的内容坐标）。
+  // span 重建（缩放/重渲染）时 WeakMap 键自动失效；字体大小变化时显式重测。
+  const glyphBandCacheRef = useRef<WeakMap<Element, { top: number; height: number; fontSize: string }>>(new WeakMap());
+
+  // 扫描 span 所在页 canvas 的对应行，找字形（黑色像素带）的精确 top/height。
+  // span 盒（em 盒）比字形视觉高度高 ~30%，直接用它画高亮会在字下方留白，
+  // 用户反馈「高亮不到字的下沿」——这里用 canvas 像素级字形带贴合。
+  const measureGlyphBand = useCallback((span: HTMLElement): { top: number; height: number } | null => {
+    const cached = glyphBandCacheRef.current.get(span);
+    const fontSize = getComputedStyle(span).fontSize;
+    if (cached && cached.fontSize === fontSize) return cached;
+    const pageDiv = span.closest('.page') as HTMLElement | null;
+    const canvas = pageDiv?.querySelector('canvas') as HTMLCanvasElement | null;
+    if (!pageDiv || !canvas) return null;
+    const crect = canvas.getBoundingClientRect();
+    const pageRect = pageDiv.getBoundingClientRect();
+    const spanRect = span.getBoundingClientRect();
+    if (crect.width <= 0 || crect.height <= 0) return null;
+    const dprX = canvas.width / crect.width;
+    const dprY = canvas.height / crect.height;
+    const x0 = Math.max(0, Math.round((spanRect.left - crect.left) * dprX));
+    const x1 = Math.min(canvas.width, Math.round((spanRect.right - crect.left) * dprX));
+    const y0 = Math.max(0, Math.round((spanRect.top - crect.top) * dprY) - 8);
+    const y1 = Math.min(canvas.height, Math.round((spanRect.bottom - crect.top) * dprY) + 8);
+    if (x1 - x0 < 8 || y1 - y0 < 8) return null;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    let img: ImageData;
+    try {
+      img = ctx.getImageData(x0, y0, x1 - x0, y1 - y0);
+    } catch {
+      return null;
+    }
+    const w = x1 - x0;
+    const h = y1 - y0;
+    // 每行字形像素计数（不透明且为深色像素；canvas 空白是透明像素，须排除）
+    const rows = new Array(h).fill(0);
+    for (let y = 0; y < h; y++) {
+      const base = y * w * 4;
+      let c = 0;
+      for (let x = 0; x < w; x++) {
+        const i = base + x * 4;
+        if (img.data[i + 3] > 128 && img.data[i] < 170 && img.data[i + 1] < 170 && img.data[i + 2] < 170) c++;
+      }
+      rows[y] = c;
+    }
+    // 找最长的连续字形行带（一行文字应是一个带；公式上下标会并入同一带）
+    let bestStart = -1;
+    let bestLen = 0;
+    let curStart = -1;
+    for (let y = 0; y < h; y++) {
+      if (rows[y] > 2) {
+        if (curStart < 0) curStart = y;
+      } else if (curStart >= 0) {
+        if (y - curStart > bestLen) {
+          bestLen = y - curStart;
+          bestStart = curStart;
+        }
+        curStart = -1;
+      }
+    }
+    if (curStart >= 0 && h - curStart > bestLen) {
+      bestLen = h - curStart;
+      bestStart = curStart;
+    }
+    if (bestStart < 0 || bestLen < 4) return null;
+    const res = {
+      top: (y0 + bestStart) / dprY + crect.top - pageRect.top,
+      height: bestLen / dprY,
+      fontSize,
+    };
+    glyphBandCacheRef.current.set(span, res);
+    return res;
+  }, []);
+
   // 自定义选区高亮：Chromium 对 pdfjs 文本层（绝对定位 span）的原生选区渲染
   // 会退化成整行矩形（选中一个词也高亮整行）。这里禁用原生 ::selection 背景，
   // 改用 Range.getClientRects()（精确到词的几何）自绘高亮层。
   //
   // 注意：跨多个 span 的选区，Chromium 对「完全包含」的 span 返回整个 span 的矩形
   // （整行宽），因此这里把选区与每个 span 求交集、逐 span 取字符精确矩形；
-  // 高度改用 span 字形盒（行盒高度含行距，会上下留白）。
+  // 高度优先用 canvas 字形带（贴合字形下沿），扫描失败时回退 span 字形盒。
   const drawSelectionHighlight = useCallback(() => {
     const overlay = selOverlayRef.current;
     const container = viewerContainerRef.current;
@@ -316,30 +391,52 @@ export function ReaderPage({
     };
     for (const span of spans) {
       if (!range.intersectsNode(span)) continue;
-      // 求 range ∩ span 的子 range：
-      // - 首/尾 span：取 range 落在该 span 内的边界；中间 span：取整个 span。
-      //   （Chromium 对「完全包含」的 span 返回整个 span 矩形＝整行，导致首尾行
-      //    只选中一部分也整行高亮——这正是要修的 bug。）
-      const startInSpan = range.startContainer === span || span.contains(range.startContainer);
-      const endInSpan = range.endContainer === span || span.contains(range.endContainer);
-      const sr = document.createRange();
-      sr.selectNodeContents(span);
-      const sub = document.createRange();
-      sub.setStart(startInSpan ? range.startContainer : sr.startContainer, startInSpan ? range.startOffset : sr.startOffset);
-      sub.setEnd(endInSpan ? range.endContainer : sr.endContainer, endInSpan ? range.endOffset : sr.endOffset);
-      // span 字形盒（垂直对齐用，行盒会上下留白）
       const spanRect = span.getBoundingClientRect();
-      for (const r of sub.getClientRects()) {
-        if (r.width === 0 || r.height === 0) continue;
-        draw(
-          r.left - crect.left + container.scrollLeft,
-          spanRect.top - crect.top + container.scrollTop,
-          r.width,
-          spanRect.height,
-        );
+      // 字形带（canvas 像素级）：相对页顶的内容坐标；失败则用 span 盒
+      let bandTop = spanRect.top - crect.top + container.scrollTop;
+      let bandHeight = spanRect.height;
+      const band = measureGlyphBand(span);
+      if (band) {
+        const pageRect = (span.closest('.page') as HTMLElement).getBoundingClientRect();
+        bandTop = band.top + pageRect.top - crect.top + container.scrollTop;
+        bandHeight = band.height;
+      }
+      // 逐文本节点求 range ∩ 文本节点的子 range。关键：子 range 的起点/终点必须
+      // 落在文本节点内部（offset 为字符偏移）——若端点是 span 元素节点，
+      // Chromium 的 getClientRects() 会返回整个 span 的矩形（整行），导致
+      // 首尾行只选中一部分也整行高亮。
+      // 裁剪偏移用节点关系判断（不用 compareBoundaryPoints——其返回值方向
+      // 在不同 Chromium 版本表现不一致，曾导致合法相交被误跳过）。
+      const children = Array.from(span.childNodes);
+      for (let ci = 0; ci < children.length; ci++) {
+        const child = children[ci];
+        if (child.nodeType !== Node.TEXT_NODE) continue;
+        const tn = child as Text;
+        if (!tn.length || !range.intersectsNode(tn)) continue;
+        let s = 0;
+        let e = tn.length;
+        const sc = range.startContainer;
+        const ec = range.endContainer;
+        if (sc === tn) s = range.startOffset;
+        else if (sc === span && range.startOffset > ci) continue; // start 在 tn 之后，不相交
+        if (ec === tn) e = range.endOffset;
+        else if (ec === span && range.endOffset <= ci) continue; // end 在 tn 之前，不相交
+        if (e <= s) continue;
+        const sub = document.createRange();
+        sub.setStart(tn, s);
+        sub.setEnd(tn, e);
+        for (const r of sub.getClientRects()) {
+          if (r.width === 0 || r.height === 0) continue;
+          draw(
+            r.left - crect.left + container.scrollLeft,
+            bandTop,
+            r.width,
+            bandHeight,
+          );
+        }
       }
     }
-  }, []);
+  }, [measureGlyphBand]);
 
   // 监听选区变化 / 滚动，重绘精确选区高亮。
   // 注意：不用 rAF 节流——隐藏窗口/后台时 rAF 会被暂停导致高亮不更新。
