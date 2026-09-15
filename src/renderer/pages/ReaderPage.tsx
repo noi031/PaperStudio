@@ -260,6 +260,19 @@ export function ReaderPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paperId]);
 
+  // pdfjs 5.x 默认给 .page 加了 9px 透明边框（--page-border），box-sizing:border-box
+  // 会把 canvas 显示区（canvasWrapper）挤进 padding box，导致 canvas 位图被 CSS
+  // 压缩、与 textLayer（1:1 坐标）错位——高亮/选区就跟着偏移。去掉边框后 canvas
+  // 与 textLayer 完全重合，高亮坐标换算不再需要任何压缩修正。
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `.pdfViewer .page { border: none !important; }`;
+    document.head.appendChild(style);
+    return () => {
+      style.remove();
+    };
+  }, []);
+
   const goto = (num: number) => {
     const viewer = viewerRef.current;
     if (!viewer) return;
@@ -411,29 +424,17 @@ export function ReaderPage({
       if (!range.intersectsNode(span)) continue;
       const spanEl = span as HTMLElement;
       const spanRect = spanEl.getBoundingClientRect();
-      // 字形带（canvas 像素级）；失败则用 span 盒。canvas 位图可能被 CSS 压缩
-      // 显示（位图高 ≠ canvas CSS 高），用户看到的字形按压缩比例渲染，高亮需
-      // 乘压缩因子对齐视觉字形，否则页面越靠下偏移越大。
-      const pageDiv = spanEl.closest('.page') as HTMLElement | null;
-      const canvasEl = pageDiv?.querySelector('canvas') as HTMLCanvasElement | null;
-      const crectC = canvasEl?.getBoundingClientRect();
-      const compressX =
-        crectC && crectC.width > 0 && canvasEl && canvasEl.width > 0 ? crectC.width / canvasEl.width : 1;
-      const compressY =
-        crectC && crectC.height > 0 && canvasEl && canvasEl.height > 0 ? crectC.height / canvasEl.height : 1;
-      const canvasLeft = crectC ? crectC.left : spanRect.left;
-      const canvasTop = crectC ? crectC.top : spanRect.top;
-      let bandTop = (spanRect.top - canvasTop) * compressY + canvasTop - crect.top + container.scrollTop;
+      // 字形带（canvas 像素级）；失败则用 span 盒。
+      // 前提：页面无边框（见下方 .pdfViewer .page { border: none } 覆盖），
+      // canvas 显示区与 textLayer 1:1 对齐，band（位图坐标）与 textLayer CSS
+      // 完全一致，直接换算即可，无需压缩因子。
+      let bandTop = spanRect.top - crect.top + container.scrollTop;
       let bandHeight = spanRect.height;
       const band = measureGlyphBand(spanEl);
       if (band) {
-        const pageRect = pageDiv ? pageDiv.getBoundingClientRect() : null;
-        const textLayerEl = spanEl.closest('.textLayer') as HTMLElement | null;
-        const tlRect = textLayerEl?.getBoundingClientRect();
-        const tlRelTop = tlRect && pageRect ? tlRect.top - pageRect.top : 0; // canvas 顶部相对页面
-        const bitY = band.top - tlRelTop; // band 的位图 y（相对 canvas 位图顶部）
-        bandTop = canvasTop + bitY * compressY - crect.top + container.scrollTop;
-        bandHeight = band.height * compressY;
+        const pageRect = (spanEl.closest('.page') as HTMLElement).getBoundingClientRect();
+        bandTop = band.top + pageRect.top - crect.top + container.scrollTop;
+        bandHeight = band.height;
       }
       // 逐文本节点求 range ∩ 文本节点的子 range。关键：子 range 的起点/终点必须
       // 落在文本节点内部（offset 为字符偏移）——若端点是 span 元素节点，
@@ -461,11 +462,10 @@ export function ReaderPage({
         sub.setEnd(tn, e);
         for (const r of sub.getClientRects()) {
           if (r.width === 0 || r.height === 0) continue;
-          // x 方向同样受 canvas 压缩影响（位图宽 ≠ CSS 宽），压缩对齐视觉字形
           draw(
-            (r.left - canvasLeft) * compressX + canvasLeft - crect.left + container.scrollLeft,
+            r.left - crect.left + container.scrollLeft,
             bandTop,
-            r.width * compressX,
+            r.width,
             bandHeight,
           );
         }
