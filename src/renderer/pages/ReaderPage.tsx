@@ -109,9 +109,10 @@ export function ReaderPage({
 }) {
   const { summaries, streaming, notes, loadSummaries, loadNotes, addNote, updateNote, deleteNote, startSummary, handleSummaryEvent } =
     useLibraryStore();
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const textLayerRef = useRef<HTMLDivElement | null>(null);
+  const viewerContainerRef = useRef<HTMLDivElement | null>(null);
+  const viewerElRef = useRef<HTMLDivElement | null>(null);
+  const viewerRef = useRef<InstanceType<typeof import('pdfjs-dist/web/pdf_viewer').PDFViewer> | null>(null);
+  const eventBusRef = useRef<InstanceType<typeof import('pdfjs-dist/web/pdf_viewer').EventBus> | null>(null);
   const notesRef = useRef<NoteRecord[]>([]);
 
   const [title, setTitle] = useState('');
@@ -134,45 +135,22 @@ export function ReaderPage({
 
   const docRef = useRef<{ doc: import('pdfjs-dist').PDFDocumentProxy; data: Uint8Array } | null>(null);
 
-  const renderPage = useCallback(
-    async (doc: import('pdfjs-dist').PDFDocumentProxy, num: number, s: number) => {
-      const page = await doc.getPage(num);
-      const viewport = page.getViewport({ scale: s });
-      const canvas = canvasRef.current;
-      const textLayer = textLayerRef.current;
-      if (!canvas || !textLayer) return;
-      canvas.width = Math.floor(viewport.width);
-      canvas.height = Math.floor(viewport.height);
-      canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = `${Math.floor(viewport.height)}px`;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-
-      textLayer.innerHTML = '';
-      // pdfjs v5 的 TextLayer 依赖 CSS 变量做布局：--total-scale-factor 决定
-      // 容器尺寸（setLayerDimensions 用 calc(var(--total-scale-factor) * ...px)）
-      // 与 span 字号（font-size: calc(var(--total-scale-factor) * var(--font-height))）。
-      // 官方 viewer 由 .pdfViewer .page 提供这些变量；裸 .textLayer 必须手动补齐，
-      // 否则容器塌缩、字号退回默认 16px，文本层与画布错位，表现为「PDF 全是图片、无法选中」。
-      textLayer.style.setProperty('--scale-factor', String(s));
-      textLayer.style.setProperty('--total-scale-factor', String(s));
-      textLayer.style.setProperty('--user-unit', '1');
-      textLayer.style.setProperty('--scale-round-x', '1px');
-      textLayer.style.setProperty('--scale-round-y', '1px');
-      // 文本层：可选中文本，锚定到画布上方。
-      const textSource = await page.streamTextContent();
-      const tl = new pdfjs!.TextLayer({
-        textContentSource: textSource,
-        container: textLayer,
-        viewport,
-      });
-      await tl.render();
-      // 回放当前页的行内批注高亮
-      applyHighlights(tl, num, notesRef.current);
-    },
-    [],
-  );
+  /** 在指定页码的已渲染文本层上重放批注高亮（PDFViewer 惰性渲染：只处理已渲染的页）。
+   *  注意：PDFViewer 的 pageView.textLayer 是 TextLayerBuilder，不暴露 textDivs，
+   *  需从它的 .textLayer div 元素里取 span（与旧版手动 TextLayer 不同）。 */
+  const replayHighlights = useCallback(() => {
+    const viewer = viewerRef.current;
+    const doc = docRef.current;
+    if (!viewer || !doc) return;
+    const n = doc.doc.numPages;
+    for (let i = 0; i < n; i++) {
+      const pv = viewer.getPageView(i);
+      const tlDiv = pv?.textLayer?.div;
+      if (!tlDiv) continue;
+      const spans = Array.from(tlDiv.querySelectorAll('span'));
+      if (spans.length) applyHighlights({ textDivs: spans as HTMLSpanElement[] }, i + 1, notesRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     if (!paperId) return;
@@ -185,6 +163,7 @@ export function ReaderPage({
         const res = await window.paper.invoke('reader:open', { id: paperId });
         if ('error' in res) {
           setError(res.error);
+          setLoading(false);
           return;
         }
         if (cancelled) return;
@@ -198,7 +177,43 @@ export function ReaderPage({
         // 批注/总结先行加载（不等全文提取，57 页提取需要几十秒）
         void loadSummaries(paperId);
         void loadNotes(paperId);
-        await renderPage(doc, 1, scale);
+
+        // 官方 PDFViewer：整份 PDF 连续滚动渲染（惰性渲染可视页）。
+        const vmod = await import('pdfjs-dist/web/pdf_viewer');
+        const container = viewerContainerRef.current;
+        const viewerEl = viewerElRef.current;
+        if (!container || !viewerEl) throw new Error('阅读器容器未就绪');
+        const eventBus = new vmod.EventBus();
+        const linkService = new vmod.PDFLinkService({ eventBus });
+        const viewer = new vmod.PDFViewer({ container, viewer: viewerEl, eventBus, linkService });
+        linkService.setViewer(viewer);
+        viewerRef.current = viewer;
+        eventBusRef.current = eventBus;
+        // 页码随滚动更新（整份连续滚动，不再有「上一页/下一页」）。
+        eventBus.on('updateviewarea', (evt) => {
+          const e = evt as { location?: { pageNumber?: number } };
+          const n = e.location?.pageNumber;
+          if (typeof n === 'number' && n >= 1) setPageNum(n);
+        });
+        // 每页渲染完成后回放该页批注高亮（PDFViewer 惰性渲染，滚动到哪渲染到哪）。
+        eventBus.on('pagerendered', (evt) => {
+          const e = evt as { pageNumber?: number; source?: { textLayer?: { div?: HTMLElement } } };
+          const tlDiv = e.source?.textLayer?.div;
+          const n = e.pageNumber;
+          if (tlDiv && n) {
+            const spans = Array.from(tlDiv.querySelectorAll('span'));
+            if (spans.length) applyHighlights({ textDivs: spans as HTMLSpanElement[] }, n, notesRef.current);
+          }
+        });
+        if (cancelled) return;
+        viewer.setDocument(doc);
+        // setDocument 异步创建页面（_pages 在 Promise.all 后填充）：必须等页面就绪
+        // 再设 currentScale，否则 _pages 为空 → 渲染中断（「renderView TypeError / scrollPageIntoView 无效页码」）。
+        eventBus.on('pagesloaded', () => {
+          viewer.currentScale = scale;
+        });
+        setLoading(false);
+
         // 提取全文（供全文总结）：后台串行提取（pdfjs worker 内部串行，并发会打崩 worker），
         // 提取完成后「总结全文」按钮才可用。
         void (async () => {
@@ -224,32 +239,37 @@ export function ReaderPage({
         })();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
-      } finally {
         setLoading(false);
       }
     })();
     return () => {
       cancelled = true;
+      const v = viewerRef.current;
+      if (v && 'cleanup' in v && typeof (v as { cleanup: () => void }).cleanup === 'function') {
+        (v as { cleanup: () => void }).cleanup();
+      }
+      viewerRef.current = null;
+      eventBusRef.current = null;
       void docRef.current?.doc.destroy();
       docRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paperId]);
 
-  const goto = async (num: number) => {
-    const d = docRef.current;
-    if (!d) return;
+  const goto = (num: number) => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
     const n = Math.max(1, Math.min(num, pageCount));
-    await renderPage(d.doc, n, scale);
+    viewer.currentPageNumber = n;
     setPageNum(n);
   };
 
-  const zoom = async (delta: number) => {
-    const d = docRef.current;
-    if (!d) return;
+  const zoom = (delta: number) => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
     const next = Math.max(0.6, Math.min(3, scale + delta));
     setScale(next);
-    await renderPage(d.doc, pageNum, next);
+    viewer.currentScale = next;
   };
 
   const onMouseUp = () => {
@@ -257,13 +277,11 @@ export function ReaderPage({
     setSelectedText(sel);
   };
 
-  // 批注数据同步到 ref（渲染高亮用），并在变化后重绘当前页。
+  // 批注数据同步到 ref（渲染高亮用），并在变化后重放已渲染页的高亮。
   useEffect(() => {
     const list = notes[paperId ?? ''] ?? [];
     notesRef.current = list;
-    if (docRef.current && list.length >= 0) {
-      void renderPage(docRef.current.doc, pageNum, scale).catch(() => {});
-    }
+    replayHighlights();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notes, paperId]);
 
@@ -363,7 +381,7 @@ export function ReaderPage({
 
   return (
     <Box sx={{ display: 'flex', gap: 2, height: '100%' }}>
-      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+      <Box sx={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
           <Button size="small" onClick={onBack}>← 返回</Button>
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
@@ -372,30 +390,18 @@ export function ReaderPage({
           <Button size="small" variant="outlined" onClick={() => void zoom(-0.2)}>−</Button>
           <Typography variant="caption">{Math.round(scale * 100)}%</Typography>
           <Button size="small" variant="outlined" onClick={() => void zoom(0.2)}>+</Button>
-          <Button size="small" disabled={pageNum <= 1} onClick={() => void goto(pageNum - 1)}>上一页</Button>
           <Typography variant="caption">{pageCount ? `${pageNum} / ${pageCount}` : ''}</Typography>
-          <Button size="small" disabled={pageNum >= pageCount} onClick={() => void goto(pageNum + 1)}>下一页</Button>
         </Stack>
         {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
         {loading && <CircularProgress size={24} sx={{ m: 2 }} />}
-        <Box
-          ref={containerRef}
-          sx={{ position: 'relative', overflow: 'auto', maxHeight: '78vh', border: '1px solid', borderColor: 'divider' }}
-          onMouseUp={onMouseUp}
-        >
-          <canvas ref={canvasRef} style={{ display: 'block' }} />
-          <div
-            ref={textLayerRef}
-            className="textLayer"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              lineHeight: 1,
-              color: 'transparent',
-              userSelect: 'text',
-              zIndex: 1,
-            }}
-          />
+        <Box sx={{ position: 'relative', flexGrow: 1, minHeight: 0 }}>
+          <Box
+            ref={viewerContainerRef}
+            sx={{ position: 'absolute', inset: 0, overflow: 'auto', border: '1px solid', borderColor: 'divider' }}
+            onMouseUp={onMouseUp}
+          >
+            <div ref={viewerElRef} className="pdfViewer" style={{ position: 'relative' }} />
+          </Box>
         </Box>
       </Box>
 
@@ -572,7 +578,7 @@ export function ReaderPage({
           </Dialog>
 
           <Divider />
-          <Typography variant="subtitle2">历史总结</Typography>
+          <Typography variant="subtitle2">上次总结</Typography>
           {history.length === 0 && <Typography variant="caption" color="text.secondary">暂无</Typography>}
           <List dense disablePadding>
             {history.map((s) => (

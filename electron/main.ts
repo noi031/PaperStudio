@@ -136,7 +136,8 @@ app.whenReady().then(async () => {
     getSettings: () => db!.getSettings(),
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
     insertSummary: (paperId, kind, content, model) => {
-      summaries.insert(paperId, kind, content, model);
+      // 刷新制：同类型总结覆盖旧的（先删旧再插新），不保留历史。
+      summaries.replace(paperId, kind, content, model);
     },
   });
 

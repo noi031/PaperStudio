@@ -26,11 +26,33 @@ function toRecord(r: SummaryRow): SummaryRecord {
 export class SummaryRepo {
   constructor(private readonly db: Database) {}
 
+  /** 每种总结类型（selected/full）只返回最新一条（刷新制：历史总结已被覆盖删除）。 */
   listByPaper(paperId: string): SummaryRecord[] {
     const rows = this.db
       .prepare('SELECT * FROM summaries WHERE paper_id = ? ORDER BY created_at DESC')
       .all(paperId) as SummaryRow[];
-    return rows.map(toRecord);
+    const seen = new Set<SummaryKind>();
+    const latest: SummaryRecord[] = [];
+    for (const r of rows) {
+      if (seen.has(r.kind)) continue;
+      seen.add(r.kind);
+      latest.push(toRecord(r));
+    }
+    return latest;
+  }
+
+  /** 覆盖式写入：每种总结类型（selected/full）只保留最新一条，插入前先删同类型旧记录。 */
+  replace(paperId: string, kind: SummaryKind, content: string, model: string | null): SummaryRecord {
+    const tx = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM summaries WHERE paper_id = ? AND kind = ?').run(paperId, kind);
+      const id = randomUUID();
+      this.db
+        .prepare('INSERT INTO summaries (id, paper_id, kind, content, model, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(id, paperId, kind, content, model, Date.now());
+      return id;
+    });
+    const id = tx();
+    return this.get(id)!;
   }
 
   insert(paperId: string, kind: SummaryKind, content: string, model: string | null): SummaryRecord {
