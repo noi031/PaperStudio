@@ -209,7 +209,7 @@ export type IpcResponse<K extends IpcChannel> = IpcContract[K]['res'];
 
 /** 检索命中（尚未入库）。source 区分数据源；externalId 为 arXiv id 或 S2 paperId。 */
 export interface PaperHit {
-  source: 'arxiv' | 'semantic_scholar';
+  source: 'arxiv' | 'semantic_scholar' | 'openalex';
   externalId: string;
   title: string;
   authors: string[];

@@ -235,13 +235,71 @@ async function s2Search(query: string, limit: number, apiKey?: string): Promise<
   );
   const headers: Record<string, string> = { Accept: 'application/json', 'User-Agent': UA };
   if (apiKey) headers['x-api-key'] = apiKey;
-  const res = await fetchWithRetry(
-    url,
-    { headers },
-    { label: 'Semantic Scholar', maxRetries: 0 },
-  );
-  if (!res.ok) throw new Error(`Semantic Scholar HTTP ${res.status}`);
-  return parseS2Json(await res.json());
+  // S2 无 key 限流极严（429 常态）；限流时回退 OpenAlex（免费开放、不限流）。
+  try {
+    const res = await fetchWithRetry(
+      url,
+      { headers },
+      { label: 'Semantic Scholar', maxRetries: 0 },
+    );
+    if (res.ok) return parseS2Json(await res.json());
+    // eslint-disable-next-line no-console
+    console.log(`[search] Semantic Scholar HTTP ${res.status}，回退 OpenAlex`);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.log(`[search] Semantic Scholar 失败（${err instanceof Error ? err.message : String(err)}），回退 OpenAlex`);
+  }
+  return openAlexSearch(query, limit);
+}
+
+/** 解析 OpenAlex /works 响应 JSON → PaperHit[]。abstract 为倒排索引需重建。 */
+export function parseOpenAlexJson(json: unknown): PaperHit[] {
+  const results = (json as { results?: unknown }).results;
+  if (!Array.isArray(results)) return [];
+  const hits: PaperHit[] = [];
+  for (const item of results as Array<Record<string, unknown>>) {
+    const id = typeof item.id === 'string' ? item.id.replace(/^https?:\/\/openalex\.org\//, '') : '';
+    const title = typeof item.title === 'string' && item.title ? item.title.trim() : '';
+    if (!id || !title) continue;
+    const authors = Array.isArray(item.authorships)
+      ? (item.authorships as Array<{ author?: { display_name?: unknown } }>)
+          .map((a) => (typeof a.author?.display_name === 'string' ? a.author.display_name : ''))
+          .filter(Boolean)
+      : [];
+    const venue = (item.primary_location as { source?: { display_name?: unknown } } | null)?.source?.display_name;
+    // abstract_inverted_index: { word: [pos,...] } → 按位置拼接。
+    const inv = item.abstract_inverted_index as Record<string, number[]> | null;
+    let abstract = '';
+    if (inv && typeof inv === 'object') {
+      const words: Array<{ w: string; p: number }> = [];
+      for (const [w, ps] of Object.entries(inv)) for (const p of ps) words.push({ w, p });
+      words.sort((a, b) => a.p - b.p);
+      abstract = words.map((x) => x.w).join(' ').slice(0, 2000);
+    }
+    hits.push({
+      source: 'openalex',
+      externalId: id,
+      title,
+      authors,
+      year: typeof item.publication_year === 'number' ? item.publication_year : null,
+      venue: typeof venue === 'string' && venue ? venue : null,
+      abstract: abstract || null,
+      url: typeof item.doi === 'string' ? `https://doi.org/${item.doi.replace(/^https?:\/\/doi\.org\//, '')}` : null,
+      pdfUrl: null,
+    });
+  }
+  return hits;
+}
+
+/** OpenAlex 检索（S2 429 限流时的回退通道；免费开放、无需 key）。 */
+async function openAlexSearch(query: string, limit: number): Promise<PaperHit[]> {
+  const url = new URL('https://api.openalex.org/works');
+  url.searchParams.set('search', query);
+  url.searchParams.set('per-page', String(Math.min(limit, 20)));
+  url.searchParams.set('mailto', 'paperstudio@localhost');
+  const res = await httpFetch(url, { headers: { Accept: 'application/json', 'User-Agent': UA } });
+  if (!res.ok) throw new Error(`OpenAlex HTTP ${res.status}`);
+  return parseOpenAlexJson(await res.json());
 }
 
 /** 把网络错误翻译成对用户友好的中文提示（429 限流最常见）。 */

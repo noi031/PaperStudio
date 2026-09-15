@@ -19,7 +19,7 @@ import { useLibraryStore } from '../store/libraryStore';
 import type { PaperHit, PaperRecord } from '../../shared/types';
 import { latexToText } from '../../shared/latex';
 
-const SOURCE_LABEL: Record<string, string> = { arxiv: 'arXiv', semantic_scholar: 'S2' };
+const SOURCE_LABEL: Record<string, string> = { arxiv: 'arXiv', semantic_scholar: 'S2', openalex: 'OpenAlex' };
 
 export function SearchPage() {
   const [query, setQuery] = useState('');
