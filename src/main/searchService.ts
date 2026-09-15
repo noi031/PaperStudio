@@ -4,12 +4,72 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { PaperHit } from '../shared/types.js';
 
+// 主进程 fetch 用 Electron 网络栈（net.fetch）：它走系统代理（与浏览器一致），
+// 而 Node 原生 fetch 是直连——直连出口 IP 常被 arXiv/S2 API 限流（429），
+// 浏览器却能访问。jest/node 环境无 electron 时回退到原生 fetch。
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const electronNet: { fetch: typeof fetch } | null = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return require('electron').net ?? null;
+  } catch {
+    return null;
+  }
+})();
+export function httpFetch(url: string | URL, init?: RequestInit): Promise<Response> {
+  return electronNet && typeof electronNet.fetch === 'function' ? electronNet.fetch(url, init) : fetch(url, init);
+}
+
 const ARXIV_API = 'https://export.arxiv.org/api/query';
 const S2_API = 'https://api.semanticscholar.org/graph/v1/paper/search';
 // arXiv API 要求请求携带标识性 User-Agent，否则极易触发 429/403 限流。
 const UA = 'PaperStudio/1.0 (https://github.com/noi031/PaperStudio)';
+// arXiv 网页搜索需要浏览器 UA（反爬标识）。
+const UA_BROWSER =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 // arXiv 官方要求相邻请求间隔 ≥3 秒；连续搜索时排队等待，避免 429。
 let lastArxivAt = 0;
+// 检索结果缓存（10 分钟），减少重复请求触发限流。
+const cache = new Map<string, { at: number; hits: PaperHit[]; warnings: string[] }>();
+const CACHE_TTL = 10 * 60 * 1000;
+
+/** 解析 arXiv 搜索页 HTML（.arxiv-result 块）→ PaperHit[]。网页端点不受 API 限流影响。 */
+export function parseArxivSearchHtml(html: string): PaperHit[] {
+  const hits: PaperHit[] = [];
+  for (const m of html.matchAll(/<li class="arxiv-result">([\s\S]*?)<\/li>/g)) {
+    const block = m[1];
+    const idM = block.match(/arxiv\.org\/abs\/(\d{4}\.\d{4,5}(?:v\d+)?)/);
+    if (!idM) continue;
+    const id = idM[1].replace(/v\d+$/, '');
+    const strip = (s: string) => s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    const title = (block.match(/<p class="title is-5 mathjax">([\s\S]*?)<\/p>/) ?? [])[1] ? strip((block.match(/<p class="title is-5 mathjax">([\s\S]*?)<\/p>/) ?? [])[1]) : '';
+    const authors = [...block.matchAll(/<a href="\/search\/\?searchtype=author[^>]*>([\s\S]*?)<\/a>/g)].map((a) => strip(a[1])).filter(Boolean);
+    const abstract = (block.match(/<span class="abstract-short[^"]*"[^>]*>([\s\S]*?)<\/span>/) ?? [])[1]
+      ? ((block.match(/<span class="abstract-short[^"]*"[^>]*>([\s\S]*?)<\/span>/) ?? [])[1] as string)
+          .replace(/<[^>]+>/g, '')
+          .replace(/&hellip;.*$/s, '')
+          .replace(/&[a-z]+;/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      : '';
+    // arXiv id 前 4 位是 YYMM（旧 id 为 math/YYMM）。
+    const yymm = id.match(/^\d{4}\./) ? id.slice(0, 4) : (id.match(/^[a-z-]+\/(\d{4})/) ?? [])[1] ?? '';
+    const year = yymm ? 2000 + Number(yymm.slice(0, 2)) || null : null;
+    if (!title) continue;
+    hits.push({
+      source: 'arxiv',
+      externalId: id,
+      title,
+      authors,
+      year,
+      venue: null,
+      abstract: abstract || null,
+      url: `https://arxiv.org/abs/${id}`,
+      pdfUrl: `https://arxiv.org/pdf/${id}`,
+    });
+  }
+  return hits;
+}
 
 async function fetchWithRetry(
   url: string | URL,
@@ -20,7 +80,7 @@ async function fetchWithRetry(
   const retryable = opts.retryable ?? ((s: number) => s === 429 || s >= 500);
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const res = await fetch(url, init);
+    const res = await httpFetch(url, init);
     if (!retryable(res.status)) return res;
     lastErr = new Error(`${opts.label} HTTP ${res.status}`);
     const ra = Number(res.headers.get('retry-after') ?? '0');
@@ -140,9 +200,29 @@ async function arxivSearch(query: string, limit: number): Promise<PaperHit[]> {
   url.searchParams.set('search_query', `all:${query}`);
   url.searchParams.set('start', '0');
   url.searchParams.set('max_results', String(Math.min(limit, 20)));
-  const res = await fetchWithRetry(url, { headers: { Accept: 'application/atom+xml', 'User-Agent': UA } }, { label: 'arXiv' });
-  if (!res.ok) throw new Error(`arXiv HTTP ${res.status}`);
-  return parseArxivAtom(await res.text());
+  // API 429 是 IP 级限流（1 小时窗口），重试无意义——只试一次，任何失败立即回退网页搜索。
+  try {
+    const res = await fetchWithRetry(url, { headers: { Accept: 'application/atom+xml', 'User-Agent': UA } }, { label: 'arXiv', maxRetries: 0 });
+    if (res.ok) return parseArxivAtom(await res.text());
+    // eslint-disable-next-line no-console
+    console.log(`[search] arXiv API HTTP ${res.status}，回退网页搜索`);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.log(`[search] arXiv API 失败（${err instanceof Error ? err.message : String(err)}），回退网页搜索`);
+  }
+  return arxivSearchWeb(query, limit);
+}
+
+/** arXiv 网页搜索（API 429 限流时的回退通道）。 */
+async function arxivSearchWeb(query: string, limit: number): Promise<PaperHit[]> {
+  await throttleArxiv();
+  const url = new URL('https://arxiv.org/search/');
+  url.searchParams.set('query', query);
+  url.searchParams.set('searchtype', 'all');
+  url.searchParams.set('start', '0');
+  const res = await httpFetch(url, { headers: { Accept: 'text/html', 'User-Agent': UA_BROWSER } });
+  if (!res.ok) throw new Error(`arXiv 网页搜索 HTTP ${res.status}`);
+  return parseArxivSearchHtml(await res.text()).slice(0, Math.min(limit, 20));
 }
 
 async function s2Search(query: string, limit: number, apiKey?: string): Promise<PaperHit[]> {
@@ -158,7 +238,7 @@ async function s2Search(query: string, limit: number, apiKey?: string): Promise<
   const res = await fetchWithRetry(
     url,
     { headers },
-    { label: 'Semantic Scholar', maxRetries: 1 },
+    { label: 'Semantic Scholar', maxRetries: 0 },
   );
   if (!res.ok) throw new Error(`Semantic Scholar HTTP ${res.status}`);
   return parseS2Json(await res.json());
@@ -173,12 +253,16 @@ function friendly(err: unknown): string {
   return m;
 }
 
-/** 并发查两源；单源失败不影响另一源（Promise.allSettled），失败原因以 warnings 返回。 */
+/** 并发查两源；单源失败不影响另一源（Promise.allSettled），失败原因以 warnings 返回。
+ *  成功结果按查询缓存 10 分钟，减少重复请求触发限流。 */
 export async function search(
   query: string,
   limit = 10,
   opts: { s2ApiKey?: string } = {},
 ): Promise<{ hits: PaperHit[]; warnings: string[] }> {
+  const key = `${query.trim().toLowerCase()}|${limit}`;
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.at < CACHE_TTL) return { hits: cached.hits, warnings: cached.warnings };
   const [arxiv, s2] = await Promise.allSettled([
     arxivSearch(query, limit),
     s2Search(query, limit, opts.s2ApiKey),
@@ -189,7 +273,9 @@ export async function search(
   else warnings.push(`arXiv 检索失败：${friendly(arxiv.reason)}`);
   if (s2.status === 'fulfilled') hits.push(...s2.value);
   else warnings.push(`Semantic Scholar 检索失败：${friendly(s2.reason)}`);
-  return { hits: mergeHits(hits), warnings };
+  const result = { hits: mergeHits(hits), warnings };
+  if (result.hits.length > 0) cache.set(key, { at: Date.now(), ...result });
+  return result;
 }
 
 /** 下载 PDF 到 dir/<safeName>.pdf；返回绝对路径。 */

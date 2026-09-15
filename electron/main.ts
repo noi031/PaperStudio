@@ -1,7 +1,8 @@
 // Electron 主进程入口（薄壳）：创建窗口、注册 IPC、管理 DB 与 dsh 引擎生命周期。
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { openDb, type Db } from '../src/main/db.js';
 import { registerIpc } from '../src/main/ipc.js';
@@ -130,7 +131,32 @@ function createWindow(): void {
   }
 }
 
+/** 读取 Windows 系统代理（HKCU Internet Settings）。启用时返回 "host:port"，否则 null。 */
+function systemProxy(): string | null {
+  try {
+    const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+    const enabled = execFileSync('reg', ['query', key, '/v', 'ProxyEnable'], { encoding: 'utf8', windowsHide: true });
+    if (!/ProxyEnable\s+REG_DWORD\s+0x1/i.test(enabled)) return null;
+    const out = execFileSync('reg', ['query', key, '/v', 'ProxyServer'], { encoding: 'utf8', windowsHide: true });
+    const m = out.match(/ProxyServer\s+REG_SZ\s+(\S+)/i);
+    return m ? m[1].replace(/^https?:\/\//, '') : null;
+  } catch {
+    return null;
+  }
+}
+
 app.whenReady().then(async () => {
+  // 让检索/下载等主进程请求走系统代理（与浏览器一致）：
+  // Node 原生 fetch 直连的出口 IP 常被 arXiv/S2 API 限流，而系统代理出口能正常访问。
+  const proxy = systemProxy();
+  if (proxy) {
+    try {
+      await session.defaultSession.setProxy({ proxyRules: `http=${proxy};https=${proxy}` });
+      console.log(`[proxy] 已启用系统代理 ${proxy}（检索/下载走代理）`);
+    } catch (e) {
+      console.log(`[proxy] 设置系统代理失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   // 首启迁移（把 C 盘旧数据搬到项目 storage/）在打开 DB 前完成
   await migrateLegacyData();
   db = openDb(dbPath());
