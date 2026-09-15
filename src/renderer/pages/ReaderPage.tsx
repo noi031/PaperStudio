@@ -281,6 +281,10 @@ export function ReaderPage({
   // 自定义选区高亮：Chromium 对 pdfjs 文本层（绝对定位 span）的原生选区渲染
   // 会退化成整行矩形（选中一个词也高亮整行）。这里禁用原生 ::selection 背景，
   // 改用 Range.getClientRects()（精确到词的几何）自绘高亮层。
+  //
+  // 注意：跨多个 span 的选区，Chromium 对「完全包含」的 span 返回整个 span 的矩形
+  // （整行宽），因此这里把选区与每个 span 求交集、逐 span 取字符精确矩形；
+  // 高度改用 span 字形盒（行盒高度含行距，会上下留白）。
   const drawSelectionHighlight = useCallback(() => {
     const overlay = selOverlayRef.current;
     const container = viewerContainerRef.current;
@@ -291,29 +295,50 @@ export function ReaderPage({
     const range = sel.getRangeAt(0);
     // 只处理文本层内的选区（侧栏等处的选区不画）
     let node: Node | null = range.startContainer;
-    let inTextLayer = false;
+    let textLayer: HTMLElement | null = null;
     while (node && node !== document.body) {
       if (node instanceof HTMLElement && node.classList.contains('textLayer')) {
-        inTextLayer = true;
+        textLayer = node;
         break;
       }
       node = node.parentNode;
     }
-    if (!inTextLayer) return;
+    if (!textLayer) return;
     const crect = container.getBoundingClientRect();
-    const rects = range.getClientRects();
-    for (const r of rects) {
-      if (r.width === 0 || r.height === 0) continue;
+    const spans = Array.from(textLayer.querySelectorAll('span'));
+    const draw = (left: number, top: number, width: number, height: number) => {
+      if (width <= 0 || height <= 0) return;
       const d = document.createElement('div');
-      d.style.cssText = `position:absolute;left:${r.left - crect.left + container.scrollLeft}px;top:${r.top - crect.top + container.scrollTop}px;width:${r.width}px;height:${r.height}px;background:rgba(66,133,244,0.35);border-radius:2px;pointer-events:none;`;
+      d.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${width}px;height:${height}px;background:rgba(66,133,244,0.35);border-radius:2px;pointer-events:none;`;
       overlay.appendChild(d);
+    };
+    for (const span of spans) {
+      if (!range.intersectsNode(span)) continue;
+      // 求 range ∩ span 的子 range：
+      // - 首/尾 span：取 range 落在该 span 内的边界；中间 span：取整个 span。
+      //   （Chromium 对「完全包含」的 span 返回整个 span 矩形＝整行，导致首尾行
+      //    只选中一部分也整行高亮——这正是要修的 bug。）
+      const startInSpan = range.startContainer === span || span.contains(range.startContainer);
+      const endInSpan = range.endContainer === span || span.contains(range.endContainer);
+      const sr = document.createRange();
+      sr.selectNodeContents(span);
+      const sub = document.createRange();
+      sub.setStart(startInSpan ? range.startContainer : sr.startContainer, startInSpan ? range.startOffset : sr.startOffset);
+      sub.setEnd(endInSpan ? range.endContainer : sr.endContainer, endInSpan ? range.endOffset : sr.endOffset);
+      // span 字形盒（垂直对齐用，行盒会上下留白）
+      const spanRect = span.getBoundingClientRect();
+      for (const r of sub.getClientRects()) {
+        if (r.width === 0 || r.height === 0) continue;
+        draw(r.left - crect.left + container.scrollLeft, spanRect.top - crect.top + container.scrollTop, r.width, spanRect.height);
+      }
     }
   }, []);
 
   // 监听选区变化 / 滚动，重绘精确选区高亮。
+  // 注意：不用 rAF 节流——隐藏窗口/后台时 rAF 会被暂停导致高亮不更新。
   useEffect(() => {
     const container = viewerContainerRef.current;
-    const onSel = () => requestAnimationFrame(drawSelectionHighlight);
+    const onSel = () => drawSelectionHighlight();
     document.addEventListener('selectionchange', onSel);
     container?.addEventListener('scroll', onSel, { passive: true });
     return () => {
