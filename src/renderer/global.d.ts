@@ -5,6 +5,7 @@ declare global {
   interface Window {
     paper: {
       invoke: <K extends keyof IpcContract>(channel: K, req?: IpcContract[K]['req']) => Promise<IpcContract[K]['res']>;
+      getPathForFile: (file: File) => string;
       onAgentEvent: (listener: (payload: unknown) => void) => () => void;
       onSummaryEvent: (listener: (payload: SummaryEvent) => void) => () => void;
     };

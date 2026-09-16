@@ -252,6 +252,7 @@ app.whenReady().then(async () => {
     getSettings: () => db!.getSettings(),
     storageDir,
     exportDir,
+    markdownDir,
   });
   createWindow();
 

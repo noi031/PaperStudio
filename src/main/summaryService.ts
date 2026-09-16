@@ -51,6 +51,29 @@ export function buildSummaryMessages(
   ];
 }
 
+/** 把总结内容写成 Markdown 文件（工作目录）；失败返回 null。供总结服务和论文包导入复用。 */
+export function writeSummaryMd(
+  markdownDir: string,
+  paperId: string,
+  kind: SummaryKind,
+  content: string,
+  paperTitle: string,
+): string | null {
+  try {
+    const dir = markdownDir;
+    fs.mkdirSync(dir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+    const safeTitle = paperTitle.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'summary';
+    const file = path.join(dir, `${safeTitle}-${kind}-${ts}.md`);
+    fs.writeFileSync(file, `# ${paperTitle}\n\n> 生成时间：${new Date().toLocaleString('zh-CN')} · 类型：${kind === 'full' ? '全文总结' : '选中段落总结'}\n\n${content}\n`, 'utf8');
+    return file;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.log(`[summary] 写 MD 文件失败：${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
 export class SummaryService {
   constructor(private readonly opts: SummaryServiceOptions) {}
 
@@ -72,19 +95,7 @@ export class SummaryService {
 
   /** 把总结内容写成 Markdown 文件（工作目录）；失败返回 null（不影响入库）。 */
   private writeMd(paperId: string, kind: SummaryKind, content: string, paperTitle: string): string | null {
-    try {
-      const dir = this.opts.markdownDir;
-      fs.mkdirSync(dir, { recursive: true });
-      const ts = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
-      const safeTitle = paperTitle.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'summary';
-      const file = path.join(dir, `${safeTitle}-${kind}-${ts}.md`);
-      fs.writeFileSync(file, `# ${paperTitle}\n\n> 生成时间：${new Date().toLocaleString('zh-CN')} · 类型：${kind === 'full' ? '全文总结' : '选中段落总结'}\n\n${content}\n`, 'utf8');
-      return file;
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.log(`[summary] 写 MD 文件失败：${err instanceof Error ? err.message : String(err)}`);
-      return null;
-    }
+    return writeSummaryMd(this.opts.markdownDir, paperId, kind, content, paperTitle);
   }
 
   private async stream(

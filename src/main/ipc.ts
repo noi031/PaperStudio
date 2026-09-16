@@ -1,4 +1,5 @@
 // 主进程 IPC 注册：所有通道集中在此，按阶段扩展。
+import fs from 'node:fs';
 import path from 'node:path';
 import type { IpcMain } from 'electron';
 import type { Db } from './db';
@@ -19,6 +20,8 @@ import { search } from './searchService.js';
 import { generateDirections } from './directionService.js';
 import { generateOutline, writeSection, exportDraft } from './writingService.js';
 import { generateSlides, exportPptx } from './presentationService.js';
+import { writeSummaryMd } from './summaryService.js';
+import { PDFDocument } from 'pdf-lib';
 
 export interface IpcDeps {
   db: Db;
@@ -36,6 +39,8 @@ export interface IpcDeps {
   storageDir: string;
   /** 导出文件目录（docx/md/tex/bib/pptx） */
   exportDir: string;
+  /** 总结 Markdown 工作目录（storage/markdown） */
+  markdownDir: string;
 }
 
 function toSessionLite(s: { id: string; title: string; createdAt: number; updatedAt: number }): AgentSessionLite {
@@ -53,7 +58,7 @@ function toMessageLite(m: {
 }
 
 export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
-  const { db, agent, papers, pdf, summaries, summary, directions, drafts, presentations, notes, getSettings, storageDir, exportDir } = deps;
+  const { db, agent, papers, pdf, summaries, summary, directions, drafts, presentations, notes, getSettings, storageDir, exportDir, markdownDir } = deps;
 
   ipcMain.handle('settings:get', () => db.getSettings());
   ipcMain.handle('settings:save', (_e, patch: Partial<PaperSettings>) => db.saveSettings(patch));
@@ -114,6 +119,186 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
       const { pdfPath } = await pdf.ensureAndRead(p);
       papers.setPdfPath(p.id, pdfPath);
       return { ok: true, path: pdfPath };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // ── 本地 PDF 导入 ─────────────────────────────────────────
+  ipcMain.handle('papers:importLocalPdf', async (_e, req: { path: string }) => {
+    try {
+      const src = path.resolve(req.path);
+      if (!fs.existsSync(src)) return { ok: false, message: '文件不存在' };
+      const buf = fs.readFileSync(src);
+      let doc: PDFDocument;
+      try {
+        doc = await PDFDocument.load(buf);
+      } catch {
+        return { ok: false, message: '无法解析该 PDF：文件损坏或已加密（需要密码的 PDF 不支持导入）' };
+      }
+      const title = (doc.getTitle() ?? '').trim() || path.basename(src, '.pdf');
+      const authors = (doc.getAuthor() ?? '')
+        .split(/[;,]/)
+        .map((a) => a.trim())
+        .filter(Boolean);
+      const year = doc.getCreationDate() ? new Date(doc.getCreationDate() as Date).getFullYear() : null;
+      const safe = title.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60) || 'paper';
+      const dest = path.join(storageDir, `${safe}.pdf`);
+      fs.writeFileSync(dest, buf);
+      const hit: PaperHit = {
+        source: 'local',
+        externalId: '',
+        title,
+        authors,
+        year: Number.isNaN(Number(year)) ? null : year,
+        venue: null,
+        abstract: null,
+        url: null,
+        pdfUrl: null,
+      };
+      const paper = papers.save(hit);
+      papers.setPdfPath(paper.id, dest);
+      return { ok: true, paper };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // ── 论文一体化数据包（PDF + 批注 + 总结）导出/导入 ─────────
+  ipcMain.handle('paper:exportBundle', async (_e, req: { id: string }) => {
+    try {
+      const p = papers.get(req.id);
+      if (!p) return { ok: false, message: '论文不存在' };
+      const pdfBase64 = p.pdfPath && fs.existsSync(p.pdfPath)
+        ? fs.readFileSync(p.pdfPath).toString('base64')
+        : null;
+      const bundle = {
+        app: 'PaperStudio',
+        kind: 'paper-bundle',
+        version: 1,
+        exportedAt: Date.now(),
+        paper: {
+          title: p.title,
+          authors: p.authors,
+          year: p.year,
+          venue: p.venue,
+          abstract: p.abstract,
+          source: p.source,
+          externalId: p.externalId,
+          url: p.url,
+          pdfUrl: p.pdfUrl,
+        },
+        pdfBase64,
+        notes: notes.listByPaper(p.id).map((n) => ({
+          page: n.page,
+          type: n.type,
+          text: n.text,
+          content: n.content,
+          color: n.color,
+          author: n.author,
+          createdAt: n.createdAt,
+        })),
+        summaries: summaries.listByPaper(p.id).map((s) => ({
+          kind: s.kind,
+          content: s.content,
+          model: s.model,
+          createdAt: s.createdAt,
+        })),
+      };
+      fs.mkdirSync(exportDir, { recursive: true });
+      const safe = p.title.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60) || 'paper';
+      const filePath = path.join(exportDir, `${safe}.paperstudio`);
+      fs.writeFileSync(filePath, JSON.stringify(bundle, null, 2), 'utf8');
+      return { ok: true, path: filePath };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  ipcMain.handle('paper:importBundle', async (_e, req: { path: string }) => {
+    try {
+      const src = path.resolve(req.path);
+      if (!fs.existsSync(src)) return { ok: false, message: '文件不存在' };
+      const bundle = JSON.parse(fs.readFileSync(src, 'utf8')) as {
+        app?: string;
+        kind?: string;
+        version?: number;
+        paper?: {
+          title?: unknown;
+          authors?: unknown;
+          year?: unknown;
+          venue?: unknown;
+          abstract?: unknown;
+          source?: unknown;
+          externalId?: unknown;
+          url?: unknown;
+          pdfUrl?: unknown;
+        };
+        pdfBase64?: unknown;
+        notes?: Array<{
+          page?: unknown;
+          type?: unknown;
+          text?: unknown;
+          content?: unknown;
+          color?: unknown;
+          author?: unknown;
+          createdAt?: unknown;
+        }>;
+        summaries?: Array<{ kind?: unknown; content?: unknown; model?: unknown; createdAt?: unknown }>;
+      };
+      if (bundle.app !== 'PaperStudio' || bundle.kind !== 'paper-bundle') {
+        return { ok: false, message: '不是有效的 PaperStudio 论文包文件' };
+      }
+      const bp = bundle.paper ?? {};
+      const title = String(bp.title ?? '未命名论文').trim() || '未命名论文';
+      const hit: PaperHit = {
+        source: (bp.source === 'arxiv' || bp.source === 'semantic_scholar' || bp.source === 'openalex' ? bp.source : 'local') as PaperHit['source'],
+        externalId: typeof bp.externalId === 'string' ? bp.externalId : '',
+        title,
+        authors: Array.isArray(bp.authors) ? (bp.authors as string[]).map(String) : [],
+        year: typeof bp.year === 'number' ? bp.year : null,
+        venue: typeof bp.venue === 'string' ? bp.venue : null,
+        abstract: typeof bp.abstract === 'string' ? bp.abstract : null,
+        url: typeof bp.url === 'string' ? bp.url : null,
+        pdfUrl: typeof bp.pdfUrl === 'string' ? bp.pdfUrl : null,
+      };
+      const paper = papers.save(hit);
+      // PDF
+      if (typeof bundle.pdfBase64 === 'string' && bundle.pdfBase64) {
+        const safe = title.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60) || 'paper';
+        const dest = path.join(storageDir, `${safe}.pdf`);
+        fs.writeFileSync(dest, Buffer.from(bundle.pdfBase64, 'base64'));
+        papers.setPdfPath(paper.id, dest);
+      }
+      // 批注
+      let importedNotes = 0;
+      if (Array.isArray(bundle.notes)) {
+        for (const n of bundle.notes) {
+          const text = String(n.text ?? '').trim();
+          if (!text) continue;
+          notes.insert(
+            paper.id,
+            Number(n.page) || 1,
+            n.type === 'comment' ? 'comment' : 'highlight',
+            text,
+            String(n.content ?? '').trim(),
+            String(n.author ?? 'me') || 'me',
+            typeof n.color === 'string' && n.color ? n.color : null,
+          );
+          importedNotes += 1;
+        }
+      }
+      // 总结：重建 Markdown 文件
+      if (Array.isArray(bundle.summaries)) {
+        for (const s of bundle.summaries) {
+          const kind: SummaryKind = s.kind === 'full' ? 'full' : 'selected';
+          const content = String(s.content ?? '').trim();
+          if (!content) continue;
+          const mdPath = writeSummaryMd(markdownDir, paper.id, kind, content, paper.title);
+          summaries.insert(paper.id, kind, content, typeof s.model === 'string' ? s.model : null, mdPath);
+        }
+      }
+      return { ok: true, paper, message: importedNotes > 0 ? `已导入 ${importedNotes} 条批注` : undefined };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }

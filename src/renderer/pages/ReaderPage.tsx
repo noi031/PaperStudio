@@ -140,6 +140,8 @@ export function ReaderPage({
   const [loading, setLoading] = useState(false);
   const [selectedText, setSelectedText] = useState('');
   const [fullText, setFullText] = useState('');
+  // 扫描版 PDF（无文本层）检测：页数多但几乎无文本 → 不能选中/总结，仅可阅读。
+  const [scanPdf, setScanPdf] = useState(false);
   const [commentDraft, setCommentDraft] = useState('');
   const [showCommentInput, setShowCommentInput] = useState(false);
   // 批注高亮颜色（预设色，默认黄）
@@ -262,7 +264,10 @@ export function ReaderPage({
             }
           }
           if (cancelled) return;
-          setFullText(parts.join('\n').slice(0, maxChars));
+          const joined = parts.join('\n');
+          setFullText(joined.slice(0, maxChars));
+          // 图片 PDF（扫描版）检测：页数多但几乎无文本 → 无文本层，无法选中/总结。
+          if (doc.numPages >= 2 && joined.replace(/\s+/g, '').length < 100) setScanPdf(true);
         })();
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -784,6 +789,11 @@ export function ReaderPage({
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, wordBreak: 'break-all' }}>
               {noteMsg}
             </Typography>
+          )}
+          {scanPdf && (
+            <Alert severity="warning" sx={{ mb: 1 }}>
+              该 PDF 是扫描版（图片型，无文本层）：可以正常阅读，但无法选中文字做批注/总结。
+            </Alert>
           )}
           {selectedText && (
             <>

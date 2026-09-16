@@ -143,12 +143,18 @@ export interface IpcContract {
   'papers:save': { req: { hit: PaperHit }; res: PaperRecord };
   'papers:delete': { req: { id: string }; res: void };
   'papers:downloadPdf': { req: { id: string }; res: { ok: boolean; path?: string; message?: string } };
+  'papers:importLocalPdf': { req: { path: string }; res: { ok: boolean; paper?: PaperRecord; message?: string } };
+  'paper:exportBundle': { req: { id: string }; res: { ok: boolean; path?: string; message?: string } };
+  'paper:importBundle': { req: { path: string }; res: { ok: boolean; paper?: PaperRecord; message?: string } };
   'reader:open': {
     req: { id: string };
     res: { title: string; data: Uint8Array; pdfPath: string } | { error: string };
   };
   'summaries:list': { req: { paperId: string }; res: SummaryRecord[] };
-  'summary:run': { req: { paperId: string; kind: SummaryKind; text: string }; res: { id: string } };
+  'summary:run': {
+    req: { paperId: string; kind: SummaryKind; text: string; images?: Array<{ page: number; dataUrl: string }> };
+    res: { id: string };
+  };
   'markdown:open': { req: { path: string }; res: { ok: boolean; message?: string } };
   // ── 行内批注 ──
   'notes:list': { req: { paperId: string }; res: NoteRecord[] };
@@ -220,7 +226,7 @@ export type IpcResponse<K extends IpcChannel> = IpcContract[K]['res'];
 
 /** 检索命中（尚未入库）。source 区分数据源；externalId 为 arXiv id 或 S2 paperId。 */
 export interface PaperHit {
-  source: 'arxiv' | 'semantic_scholar' | 'openalex';
+  source: 'arxiv' | 'semantic_scholar' | 'openalex' | 'local';
   externalId: string;
   title: string;
   authors: string[];
