@@ -18,7 +18,7 @@ interface LibraryStore {
   summaries: Record<string, SummaryRecord[]>;
   streaming: Record<string, StreamingSummary>;
   notes: Record<string, NoteRecord[]>;
-  runSearch: (query: string, limit?: number, offset?: number) => Promise<void>;
+  runSearch: (query: string, limit?: number, offset?: number, cursor?: string) => Promise<{ nextCursor: string | null; count: number }>;
   loadPapers: () => Promise<void>;
   saveHit: (hit: PaperHit) => Promise<void>;
   removePaper: (id: string) => Promise<void>;
@@ -49,18 +49,21 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   streaming: {},
   notes: {},
 
-  runSearch: async (query, limit, offset) => {
-    if (!query.trim()) return;
+  runSearch: async (query, limit, offset, cursor) => {
+    if (!query.trim()) return { nextCursor: null, count: 0 };
     set({ searching: true, searchError: null, searchWarnings: [] });
     try {
-      const res = (await window.paper.invoke('search:run', { query: query.trim(), limit, offset })) as {
+      const res = (await window.paper.invoke('search:run', { query: query.trim(), limit, offset, cursor })) as {
         hits: PaperHit[];
         warnings: string[];
+        nextCursor?: string | null;
       };
       set({ hits: res.hits, searchWarnings: res.warnings });
+      return { nextCursor: res.nextCursor ?? null, count: res.hits.length };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       set({ searchError: message.replace(/^Error invoking remote method '[^']+': /, '') });
+      return { nextCursor: null, count: 0 };
     } finally {
       set({ searching: false });
     }

@@ -30,7 +30,7 @@ const UA_BROWSER =
 // arXiv 官方要求相邻请求间隔 ≥3 秒；连续搜索时排队等待，避免 429。
 let lastArxivAt = 0;
 // 检索结果缓存（10 分钟），减少重复请求触发限流。
-const cache = new Map<string, { at: number; hits: PaperHit[]; warnings: string[] }>();
+const cache = new Map<string, { at: number; hits: PaperHit[]; warnings: string[]; nextCursor: string | null }>();
 const CACHE_TTL = 10 * 60 * 1000;
 
 /** 解析 arXiv 搜索页 HTML（.arxiv-result 块）→ PaperHit[]。网页端点不受 API 限流影响。 */
@@ -225,7 +225,13 @@ async function arxivSearchWeb(query: string, limit: number, offset = 0): Promise
   return parseArxivSearchHtml(await res.text()).slice(0, Math.min(limit, 20));
 }
 
-async function s2Search(query: string, limit: number, apiKey?: string, offset = 0): Promise<PaperHit[]> {
+async function s2Search(
+  query: string,
+  limit: number,
+  apiKey?: string,
+  offset = 0,
+  oaCursor = '*',
+): Promise<{ hits: PaperHit[]; nextCursor: string | null }> {
   const url = new URL(S2_API);
   url.searchParams.set('query', query);
   url.searchParams.set('limit', String(Math.min(limit, 20)));
@@ -243,14 +249,14 @@ async function s2Search(query: string, limit: number, apiKey?: string, offset = 
       { headers },
       { label: 'Semantic Scholar', maxRetries: 0 },
     );
-    if (res.ok) return parseS2Json(await res.json());
+    if (res.ok) return { hits: parseS2Json(await res.json()), nextCursor: null };
     // eslint-disable-next-line no-console
     console.log(`[search] Semantic Scholar HTTP ${res.status}，回退 OpenAlex`);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.log(`[search] Semantic Scholar 失败（${err instanceof Error ? err.message : String(err)}），回退 OpenAlex`);
   }
-  return openAlexSearch(query, limit, offset);
+  return openAlexSearch(query, limit, oaCursor);
 }
 
 /** 解析 OpenAlex /works 响应 JSON → PaperHit[]。abstract 为倒排索引需重建。 */
@@ -292,16 +298,23 @@ export function parseOpenAlexJson(json: unknown): PaperHit[] {
   return hits;
 }
 
-/** OpenAlex 检索（S2 429 限流时的回退通道；免费开放、无需 key）。 */
-async function openAlexSearch(query: string, limit: number, offset = 0): Promise<PaperHit[]> {
+/** OpenAlex 检索（S2 429 限流时的回退通道；免费开放、无需 key）。
+ *  分页用 cursor 机制（OpenAlex 不支持 offset 参数，offset 会返回 HTTP 400）。
+ *  返回 nextCursor 供「下一页」继续。 */
+async function openAlexSearch(
+  query: string,
+  limit: number,
+  cursor = '*',
+): Promise<{ hits: PaperHit[]; nextCursor: string | null }> {
   const url = new URL('https://api.openalex.org/works');
   url.searchParams.set('search', query);
   url.searchParams.set('per-page', String(Math.min(limit, 20)));
-  if (offset > 0) url.searchParams.set('offset', String(Math.min(offset, 10000)));
+  url.searchParams.set('cursor', cursor);
   url.searchParams.set('mailto', 'paperstudio@localhost');
   const res = await httpFetch(url, { headers: { Accept: 'application/json', 'User-Agent': UA } });
   if (!res.ok) throw new Error(`OpenAlex HTTP ${res.status}`);
-  return parseOpenAlexJson(await res.json());
+  const json = (await res.json()) as { results?: unknown; meta?: { next_cursor?: string | null } };
+  return { hits: parseOpenAlexJson(json), nextCursor: json.meta?.next_cursor ?? null };
 }
 
 /** 把网络错误翻译成对用户友好的中文提示（429 限流最常见）。 */
@@ -314,27 +327,33 @@ function friendly(err: unknown): string {
 }
 
 /** 并发查两源；单源失败不影响另一源（Promise.allSettled），失败原因以 warnings 返回。
- *  成功结果按查询+页缓存 10 分钟，减少重复请求触发限流。offset 用于分页（每页 limit 条）。 */
+ *  成功结果按查询+页+游标缓存 10 分钟，减少重复请求触发限流。
+ *  offset 用于 arXiv/S2 分页；oaCursor 用于 OpenAlex 游标分页（OpenAlex 不支持 offset）。
+ *  返回 nextCursor：OpenAlex 通道的下一页游标（其他通道为 null）。 */
 export async function search(
   query: string,
   limit = 10,
-  opts: { s2ApiKey?: string } = {},
+  opts: { s2ApiKey?: string; oaCursor?: string } = {},
   offset = 0,
-): Promise<{ hits: PaperHit[]; warnings: string[] }> {
-  const key = `${query.trim().toLowerCase()}|${limit}|${offset}`;
+): Promise<{ hits: PaperHit[]; warnings: string[]; nextCursor: string | null }> {
+  const oaCursor = opts.oaCursor ?? '*';
+  const key = `${query.trim().toLowerCase()}|${limit}|${offset}|${oaCursor}`;
   const cached = cache.get(key);
-  if (cached && Date.now() - cached.at < CACHE_TTL) return { hits: cached.hits, warnings: cached.warnings };
+  if (cached && Date.now() - cached.at < CACHE_TTL) {
+    return { hits: cached.hits, warnings: cached.warnings, nextCursor: cached.nextCursor ?? null };
+  }
   const [arxiv, s2] = await Promise.allSettled([
     arxivSearch(query, limit, offset),
-    s2Search(query, limit, opts.s2ApiKey, offset),
+    s2Search(query, limit, opts.s2ApiKey, offset, oaCursor),
   ]);
   const hits: PaperHit[] = [];
   const warnings: string[] = [];
   if (arxiv.status === 'fulfilled') hits.push(...arxiv.value);
   else warnings.push(`arXiv 检索失败：${friendly(arxiv.reason)}`);
-  if (s2.status === 'fulfilled') hits.push(...s2.value);
+  if (s2.status === 'fulfilled') hits.push(...s2.value.hits);
   else warnings.push(`Semantic Scholar 检索失败：${friendly(s2.reason)}`);
-  const result = { hits: mergeHits(hits), warnings };
+  const nextCursor = s2.status === 'fulfilled' ? s2.value.nextCursor : null;
+  const result = { hits: mergeHits(hits), warnings, nextCursor };
   if (result.hits.length > 0) cache.set(key, { at: Date.now(), ...result });
   return result;
 }

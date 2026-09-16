@@ -100,8 +100,8 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   });
 
   // ── P3 读的闭环 ───────────────────────────────────────────
-  ipcMain.handle('search:run', async (_e, req: { query: string; limit?: number; offset?: number }) =>
-    search(req.query, req.limit ?? 10, { s2ApiKey: getSettings().semanticScholarApiKey }, req.offset ?? 0),
+  ipcMain.handle('search:run', async (_e, req: { query: string; limit?: number; offset?: number; cursor?: string }) =>
+    search(req.query, req.limit ?? 10, { s2ApiKey: getSettings().semanticScholarApiKey, oaCursor: req.cursor }, req.offset ?? 0),
   );
 
   ipcMain.handle('papers:list', () => papers.list());

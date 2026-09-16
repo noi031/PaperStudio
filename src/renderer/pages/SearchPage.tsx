@@ -26,6 +26,10 @@ export function SearchPage() {
   const [query, setQuery] = useState('');
   // 分页：第 1 页起；翻页时用同一关键词重新检索（offset = (page-1)*PAGE_SIZE）。
   const [page, setPage] = useState(1);
+  // 每页的 OpenAlex 游标（cursors[page-1] = 请求第 page 页用的 cursor；OpenAlex 用 cursor 分页）。
+  const [cursors, setCursors] = useState<string[]>(['*']);
+  // 是否已到最后一页（下一页返回空结果）
+  const [noMore, setNoMore] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadMsg, setDownloadMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const { hits, searching, searchError, searchWarnings, papers, runSearch, loadPapers, saveHit, downloadPdf } =
@@ -38,26 +42,44 @@ export function SearchPage() {
   const savedKeys = new Set(papers.map((p) => `${p.source}:${p.externalId}`));
   const isSaved = (h: PaperHit) => savedKeys.has(`${h.source}:${h.externalId}`);
 
-  const doSearch = (p: number) => {
-    if (!query.trim()) return;
-    void runSearch(query, PAGE_SIZE, (p - 1) * PAGE_SIZE);
+  const doSearch = async (p: number) => {
+    if (!query.trim()) return { nextCursor: null as string | null, count: 0 };
+    const cursor = cursors[p - 1] ?? '*';
+    setNoMore(false);
+    const res = await runSearch(query, PAGE_SIZE, (p - 1) * PAGE_SIZE, cursor);
+    // 记录本页返回的 nextCursor，供「下一页」使用（OpenAlex 通道）
+    if (res.nextCursor) {
+      setCursors((cs) => {
+        const next = [...cs];
+        next[p] = res.nextCursor ?? '';
+        return next;
+      });
+    }
+    return res;
   };
 
   const handleSearch = () => {
     setPage(1);
-    doSearch(1);
+    setCursors(['*']);
+    setNoMore(false);
+    void doSearch(1);
   };
 
-  const handleNext = () => {
-    const next = page + 1;
-    setPage(next);
-    doSearch(next);
+  const handleNext = async () => {
+    const res = await doSearch(page + 1);
+    if (res.count === 0) {
+      // 下一页无任何结果：提示没有更多，留在当前页
+      setNoMore(true);
+    } else {
+      setPage(page + 1);
+    }
   };
 
   const handlePrev = () => {
     const prev = Math.max(1, page - 1);
     setPage(prev);
-    doSearch(prev);
+    setNoMore(false);
+    void doSearch(prev);
   };
 
   const handleSave = async (h: PaperHit) => {
@@ -108,12 +130,12 @@ export function SearchPage() {
         <Button variant="outlined" disabled={searching || page <= 1} onClick={handlePrev}>
           上一页
         </Button>
-        <Button variant="outlined" disabled={searching} onClick={handleNext}>
+        <Button variant="outlined" disabled={searching || noMore} onClick={() => void handleNext()}>
           下一页
         </Button>
         {hits.length > 0 && (
           <Typography variant="caption" sx={{ alignSelf: 'center' }}>
-            第 {page} 页（每页 {PAGE_SIZE} 条）
+            第 {page} 页（每页 {PAGE_SIZE} 条）{noMore ? ' · 已到最后一页' : ''}
           </Typography>
         )}
       </Stack>
