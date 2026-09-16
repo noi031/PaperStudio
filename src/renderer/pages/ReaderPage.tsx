@@ -150,9 +150,6 @@ export function ReaderPage({
   const [editingNote, setEditingNote] = useState<NoteRecord | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editColor, setEditColor] = useState<string>(NOTE_COLORS[0]);
-  // 批注导出/导入
-  const [noteMsg, setNoteMsg] = useState<string | null>(null);
-  const noteImportRef = useRef<HTMLInputElement>(null);
 
   const docRef = useRef<{ doc: import('pdfjs-dist').PDFDocumentProxy; data: Uint8Array } | null>(null);
 
@@ -636,31 +633,6 @@ export function ReaderPage({
     });
   };
 
-  const handleExportNotes = () => {
-    if (!paperId) return;
-    void window.paper
-      .invoke('notes:export', { paperId })
-      .then((r) => {
-        const res = r as { ok: boolean; path?: string; message?: string };
-        setNoteMsg(res.ok ? `已导出：${res.path}` : `导出失败：${res.message ?? ''}`);
-      });
-  };
-
-  const handleImportNotesFile = (file: File) => {
-    if (!paperId) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      void window.paper
-        .invoke('notes:import', { paperId, json: String(reader.result ?? '') })
-        .then(async (r) => {
-          const res = r as { ok: boolean; imported?: number; message?: string };
-          setNoteMsg(res.ok ? `已导入 ${res.imported ?? 0} 条批注` : `导入失败：${res.message ?? ''}`);
-          if (res.ok) await loadNotes(paperId);
-        });
-    };
-    reader.readAsText(file);
-  };
-
   const handleSendToAssistant = () => {
     if (!selectedText) return;
     // @ 引用块：把选中段落加入助手待发引用列表，可继续在对话里追加问题后一次性发出。
@@ -771,25 +743,7 @@ export function ReaderPage({
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 0.5 }}>
             <Typography variant="subtitle2" sx={{ fontSize: 12 }}>批注</Typography>
             <Box sx={{ flexGrow: 1 }} />
-            <Button size="small" variant="outlined" onClick={handleExportNotes}>导出</Button>
-            <Button size="small" variant="outlined" onClick={() => noteImportRef.current?.click()}>导入</Button>
-            <input
-              ref={noteImportRef}
-              type="file"
-              accept=".json,application/json"
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleImportNotesFile(f);
-                e.target.value = '';
-              }}
-            />
           </Stack>
-          {noteMsg && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, wordBreak: 'break-all' }}>
-              {noteMsg}
-            </Typography>
-          )}
           {scanPdf && (
             <Alert severity="warning" sx={{ mb: 1 }}>
               该 PDF 是扫描版（图片型，无文本层）：可以正常阅读，但无法选中文字做批注/总结。
