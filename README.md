@@ -47,7 +47,7 @@ cd PaperStudio
 
 ## 3. 安装依赖
 
-项目根目录（含 `package.json`）执行：
+> **仓库不包含 `node_modules/`**（已被 `.gitignore` 忽略，不会随 GitHub 上传）。克隆代码后，在项目根目录（含 `package.json`）执行下面这一条命令即可安装全部 Node 依赖包：
 
 ```powershell
 npm install
