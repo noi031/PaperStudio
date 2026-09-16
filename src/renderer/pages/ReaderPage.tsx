@@ -769,8 +769,8 @@ export function ReaderPage({
           >
             {extracting ? '提取图表中…' : fullText ? '总结全文' : '全文提取中…'}
           </Button>
-          <PromptEditor settingKey="promptSummarySelected" label="总结选中段落" hint="「总结选中段落」使用的 AI 提示词" />
-          <PromptEditor settingKey="promptSummaryFull" label="总结全文" hint="「总结全文」使用的 AI 提示词" />
+          <PromptEditor settingKey="promptSummarySelected" label="总结选中段落" hint="「总结选中段落」使用的 AI 提示词；总结时会附带论文图表清单，可在提示词中要求引用图表、生成表格（留空恢复默认）" />
+          <PromptEditor settingKey="promptSummaryFull" label="总结全文" hint="「总结全文」使用的 AI 提示词；总结时会附带论文图表清单，可在提示词中要求引用图表、生成表格（留空恢复默认）" />
 
           {runningStreams.map((s) => (
             <Box key={s.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', alignItems: 'center', gap: 1 }}>

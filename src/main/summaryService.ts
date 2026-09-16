@@ -28,8 +28,7 @@ export interface SummaryServiceOptions {
 }
 
 /** 组装 chat 消息（纯函数，供单测）。system 为空时使用内置默认提示词。
- *  figList：论文图表清单（如「第3页图：images/xxx/fig-3.png」），非空时追加到 system，
- *  引导模型图文并茂（Markdown 图片引用 + 表格）。 */
+ *  图表相关指令完全在可编辑提示词中；figList 仅作为数据清单（论文图表路径）附加，不掺指令。 */
 export function buildSummaryMessages(
   paperTitle: string,
   kind: SummaryKind,
@@ -38,28 +37,28 @@ export function buildSummaryMessages(
   maxInputChars: number = MAX_INPUT_CHARS,
   figList = '',
 ): Array<{ role: 'system' | 'user'; content: string }> {
-  const sys =
-    system?.trim() ||
-    (kind === 'selected'
-      ? '你是论文精读助手。用户选中了一段论文原文，请用中文解释这段内容：它在讲什么、在论文中起什么作用、有哪些关键概念。' +
-        '输出 Markdown 格式：第一行 # 标题（概括这段内容），用 ## 小节、- 列表、**加粗** 组织，控制在 300-600 字。' +
-        '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。'
-      : '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分。' +
-        '输出 Markdown 格式：# 标题（论文标题）、## 背景、## 方法、## 结果、## 贡献与局限，用 - 列表和 **加粗** 组织，800-1500 字。' +
-        '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。');
-  const figNote = figList
-    ? '\n\n论文图表截图（已保存到工作目录，与总结文件同目录）：' +
-      figList +
-      '。' +
-      '请图文并茂：在总结中与图表相关的小节用 Markdown 图片语法引用（如 ![第3页图](images/xxx/fig-3.png)，路径必须与上面给出的完全一致）；' +
-      '需要对比数据时用 Markdown 表格（如 | 指标 | 数值 |）。'
-    : '';
+  const sys = system?.trim() || (kind === 'selected' ? DEFAULT_SELECTED_PROMPT : DEFAULT_FULL_PROMPT);
+  // 纯数据：论文图表清单（图片文件与总结同目录）。如何引用由可编辑提示词决定。
+  const figNote = figList ? `\n\n论文图表清单（图片文件与总结文件同目录）：${figList}` : '';
   const clipped = text.length > maxInputChars ? `${text.slice(0, maxInputChars)}\n…（原文过长已截断）` : text;
   return [
     { role: 'system', content: sys + figNote },
     { role: 'user', content: `论文标题：${paperTitle}\n\n${clipped}` },
   ];
 }
+
+/** 内置默认提示词（与设置页 DEFAULT_SETTINGS 一致，留空恢复默认）。 */
+const DEFAULT_SELECTED_PROMPT =
+  '你是论文精读助手。用户选中了一段论文原文，请用中文解释这段内容：它在讲什么、在论文中起什么作用、有哪些关键概念。' +
+  '输出 Markdown 格式：第一行 # 标题（概括这段内容），用 ## 小节、- 列表、**加粗** 组织，控制在 300-600 字。' +
+  '如果系统提供的论文图表清单中包含与本段内容相关的图表，请用 Markdown 图片语法引用它（![第X页图](images/.../fig-X.png)），做到图文并茂；需要对比的数据用 Markdown 表格（如 | 指标 | 数值 |）呈现。' +
+  '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。';
+
+const DEFAULT_FULL_PROMPT =
+  '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分。' +
+  '输出 Markdown 格式：# 标题（论文标题）、## 背景、## 方法、## 结果、## 贡献与局限，用 - 列表和 **加粗** 组织，800-1500 字。' +
+  '请图文并茂：系统会提供论文图表清单（含图片引用路径），在总结中与图表相关的小节必须用 Markdown 图片语法引用论文原图（如 ![第3页图](images/.../fig-3.png)，路径按清单原样给出）；需要对比的数据用 Markdown 表格（如 | 指标 | 数值 |）呈现。' +
+  '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。';
 
 /** 把总结内容写成 Markdown 文件（工作目录）；失败返回 null。供总结服务和论文包导入复用。 */
 export function writeSummaryMd(
