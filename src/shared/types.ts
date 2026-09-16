@@ -140,7 +140,7 @@ export interface IpcContract {
   'agent:listMessages': { req: { id: string }; res: AgentMessageLite[] };
   'agent:sendMessage': { req: { id: string; text: string }; res: { ok: boolean } };
   'agent:stop': { req: { id: string }; res: void };
-  'search:run': { req: { query: string; limit?: number }; res: { hits: PaperHit[]; warnings: string[] } };
+  'search:run': { req: { query: string; limit?: number; offset?: number }; res: { hits: PaperHit[]; warnings: string[] } };
   'papers:list': { req: void; res: PaperRecord[] };
   'papers:save': { req: { hit: PaperHit }; res: PaperRecord };
   'papers:delete': { req: { id: string }; res: void };

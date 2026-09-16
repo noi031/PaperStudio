@@ -194,11 +194,11 @@ export function mergeHits(hits: PaperHit[]): PaperHit[] {
   return [...byKey.values()];
 }
 
-async function arxivSearch(query: string, limit: number): Promise<PaperHit[]> {
+async function arxivSearch(query: string, limit: number, offset = 0): Promise<PaperHit[]> {
   await throttleArxiv();
   const url = new URL(ARXIV_API);
   url.searchParams.set('search_query', `all:${query}`);
-  url.searchParams.set('start', '0');
+  url.searchParams.set('start', String(offset));
   url.searchParams.set('max_results', String(Math.min(limit, 20)));
   // API 429 是 IP 级限流（1 小时窗口），重试无意义——只试一次，任何失败立即回退网页搜索。
   try {
@@ -210,25 +210,26 @@ async function arxivSearch(query: string, limit: number): Promise<PaperHit[]> {
     // eslint-disable-next-line no-console
     console.log(`[search] arXiv API 失败（${err instanceof Error ? err.message : String(err)}），回退网页搜索`);
   }
-  return arxivSearchWeb(query, limit);
+  return arxivSearchWeb(query, limit, offset);
 }
 
 /** arXiv 网页搜索（API 429 限流时的回退通道）。 */
-async function arxivSearchWeb(query: string, limit: number): Promise<PaperHit[]> {
+async function arxivSearchWeb(query: string, limit: number, offset = 0): Promise<PaperHit[]> {
   await throttleArxiv();
   const url = new URL('https://arxiv.org/search/');
   url.searchParams.set('query', query);
   url.searchParams.set('searchtype', 'all');
-  url.searchParams.set('start', '0');
+  url.searchParams.set('start', String(offset));
   const res = await httpFetch(url, { headers: { Accept: 'text/html', 'User-Agent': UA_BROWSER } });
   if (!res.ok) throw new Error(`arXiv 网页搜索 HTTP ${res.status}`);
   return parseArxivSearchHtml(await res.text()).slice(0, Math.min(limit, 20));
 }
 
-async function s2Search(query: string, limit: number, apiKey?: string): Promise<PaperHit[]> {
+async function s2Search(query: string, limit: number, apiKey?: string, offset = 0): Promise<PaperHit[]> {
   const url = new URL(S2_API);
   url.searchParams.set('query', query);
   url.searchParams.set('limit', String(Math.min(limit, 20)));
+  url.searchParams.set('offset', String(offset));
   url.searchParams.set(
     'fields',
     'title,abstract,year,venue,authors,externalIds,openAccessPdf,url',
@@ -249,7 +250,7 @@ async function s2Search(query: string, limit: number, apiKey?: string): Promise<
     // eslint-disable-next-line no-console
     console.log(`[search] Semantic Scholar 失败（${err instanceof Error ? err.message : String(err)}），回退 OpenAlex`);
   }
-  return openAlexSearch(query, limit);
+  return openAlexSearch(query, limit, offset);
 }
 
 /** 解析 OpenAlex /works 响应 JSON → PaperHit[]。abstract 为倒排索引需重建。 */
@@ -292,10 +293,11 @@ export function parseOpenAlexJson(json: unknown): PaperHit[] {
 }
 
 /** OpenAlex 检索（S2 429 限流时的回退通道；免费开放、无需 key）。 */
-async function openAlexSearch(query: string, limit: number): Promise<PaperHit[]> {
+async function openAlexSearch(query: string, limit: number, offset = 0): Promise<PaperHit[]> {
   const url = new URL('https://api.openalex.org/works');
   url.searchParams.set('search', query);
   url.searchParams.set('per-page', String(Math.min(limit, 20)));
+  if (offset > 0) url.searchParams.set('offset', String(Math.min(offset, 10000)));
   url.searchParams.set('mailto', 'paperstudio@localhost');
   const res = await httpFetch(url, { headers: { Accept: 'application/json', 'User-Agent': UA } });
   if (!res.ok) throw new Error(`OpenAlex HTTP ${res.status}`);
@@ -312,18 +314,19 @@ function friendly(err: unknown): string {
 }
 
 /** 并发查两源；单源失败不影响另一源（Promise.allSettled），失败原因以 warnings 返回。
- *  成功结果按查询缓存 10 分钟，减少重复请求触发限流。 */
+ *  成功结果按查询+页缓存 10 分钟，减少重复请求触发限流。offset 用于分页（每页 limit 条）。 */
 export async function search(
   query: string,
   limit = 10,
   opts: { s2ApiKey?: string } = {},
+  offset = 0,
 ): Promise<{ hits: PaperHit[]; warnings: string[] }> {
-  const key = `${query.trim().toLowerCase()}|${limit}`;
+  const key = `${query.trim().toLowerCase()}|${limit}|${offset}`;
   const cached = cache.get(key);
   if (cached && Date.now() - cached.at < CACHE_TTL) return { hits: cached.hits, warnings: cached.warnings };
   const [arxiv, s2] = await Promise.allSettled([
-    arxivSearch(query, limit),
-    s2Search(query, limit, opts.s2ApiKey),
+    arxivSearch(query, limit, offset),
+    s2Search(query, limit, opts.s2ApiKey, offset),
   ]);
   const hits: PaperHit[] = [];
   const warnings: string[] = [];

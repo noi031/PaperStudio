@@ -20,9 +20,12 @@ import type { PaperHit, PaperRecord } from '../../shared/types';
 import { latexToText } from '../../shared/latex';
 
 const SOURCE_LABEL: Record<string, string> = { arxiv: 'arXiv', semantic_scholar: 'S2', openalex: 'OpenAlex' };
+const PAGE_SIZE = 10;
 
 export function SearchPage() {
   const [query, setQuery] = useState('');
+  // 分页：第 1 页起；翻页时用同一关键词重新检索（offset = (page-1)*PAGE_SIZE）。
+  const [page, setPage] = useState(1);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadMsg, setDownloadMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const { hits, searching, searchError, searchWarnings, papers, runSearch, loadPapers, saveHit, downloadPdf } =
@@ -34,6 +37,28 @@ export function SearchPage() {
 
   const savedKeys = new Set(papers.map((p) => `${p.source}:${p.externalId}`));
   const isSaved = (h: PaperHit) => savedKeys.has(`${h.source}:${h.externalId}`);
+
+  const doSearch = (p: number) => {
+    if (!query.trim()) return;
+    void runSearch(query, PAGE_SIZE, (p - 1) * PAGE_SIZE);
+  };
+
+  const handleSearch = () => {
+    setPage(1);
+    doSearch(1);
+  };
+
+  const handleNext = () => {
+    const next = page + 1;
+    setPage(next);
+    doSearch(next);
+  };
+
+  const handlePrev = () => {
+    const prev = Math.max(1, page - 1);
+    setPage(prev);
+    doSearch(prev);
+  };
 
   const handleSave = async (h: PaperHit) => {
     await saveHit(h);
@@ -74,12 +99,23 @@ export function SearchPage() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') void runSearch(query);
+            if (e.key === 'Enter') handleSearch();
           }}
         />
-        <Button variant="contained" disabled={searching || !query.trim()} onClick={() => void runSearch(query)}>
+        <Button variant="contained" disabled={searching || !query.trim()} onClick={handleSearch}>
           检索
         </Button>
+        <Button variant="outlined" disabled={searching || page <= 1} onClick={handlePrev}>
+          上一页
+        </Button>
+        <Button variant="outlined" disabled={searching} onClick={handleNext}>
+          下一页
+        </Button>
+        {hits.length > 0 && (
+          <Typography variant="caption" sx={{ alignSelf: 'center' }}>
+            第 {page} 页（每页 {PAGE_SIZE} 条）
+          </Typography>
+        )}
       </Stack>
       {searching && <LinearProgress sx={{ mb: 2 }} />}
       {searchError && (

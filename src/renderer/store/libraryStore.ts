@@ -18,7 +18,7 @@ interface LibraryStore {
   summaries: Record<string, SummaryRecord[]>;
   streaming: Record<string, StreamingSummary>;
   notes: Record<string, NoteRecord[]>;
-  runSearch: (query: string, limit?: number) => Promise<void>;
+  runSearch: (query: string, limit?: number, offset?: number) => Promise<void>;
   loadPapers: () => Promise<void>;
   saveHit: (hit: PaperHit) => Promise<void>;
   removePaper: (id: string) => Promise<void>;
@@ -49,11 +49,11 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   streaming: {},
   notes: {},
 
-  runSearch: async (query, limit) => {
+  runSearch: async (query, limit, offset) => {
     if (!query.trim()) return;
     set({ searching: true, searchError: null, searchWarnings: [] });
     try {
-      const res = (await window.paper.invoke('search:run', { query: query.trim(), limit })) as {
+      const res = (await window.paper.invoke('search:run', { query: query.trim(), limit, offset })) as {
         hits: PaperHit[];
         warnings: string[];
       };
