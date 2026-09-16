@@ -1,6 +1,9 @@
 // P3 总结服务：OpenAI 兼容端点流式总结。
-// chunk 经 webContents.send('summary:event') 推送，完成后写入 summaries 表。
+// chunk 经 webContents.send('summary:event') 推送，完成后写入 summaries 表，
+// 并生成 Markdown 文件到工作目录（storage/markdown），UI 只展示 MD 链接。
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import OpenAI from 'openai';
 import type { BrowserWindow } from 'electron';
 import type { PaperSettings, SummaryEvent, SummaryKind } from '../shared/types.js';
@@ -13,7 +16,15 @@ export const MAX_OUTPUT_TOKENS = 8000;
 export interface SummaryServiceOptions {
   getSettings: () => PaperSettings;
   getWindow: () => BrowserWindow | null;
-  insertSummary: (paperId: string, kind: SummaryKind, content: string, model: string | null) => void;
+  /** 写入 Markdown 文件的工作目录（storage/markdown）。 */
+  markdownDir: string;
+  insertSummary: (
+    paperId: string,
+    kind: SummaryKind,
+    content: string,
+    model: string | null,
+    mdPath: string | null,
+  ) => void;
 }
 
 /** 组装 chat 消息（纯函数，供单测）。system 为空时使用内置默认提示词。 */
@@ -27,8 +38,12 @@ export function buildSummaryMessages(
   const sys =
     system?.trim() ||
     (kind === 'selected'
-      ? '你是论文精读助手。用户选中了一段论文原文，请用中文解释这段内容：它在讲什么、在论文中起什么作用、有哪些关键概念。保持简洁，分点输出。数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。'
-      : '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分分点输出，语言为中文。数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。');
+      ? '你是论文精读助手。用户选中了一段论文原文，请用中文解释这段内容：它在讲什么、在论文中起什么作用、有哪些关键概念。' +
+        '输出 Markdown 格式：第一行 # 标题（概括这段内容），用 ## 小节、- 列表、**加粗** 组织，控制在 300-600 字。' +
+        '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。'
+      : '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分。' +
+        '输出 Markdown 格式：# 标题（论文标题）、## 背景、## 方法、## 结果、## 贡献与局限，用 - 列表和 **加粗** 组织，800-1500 字。' +
+        '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。');
   const clipped = text.length > maxInputChars ? `${text.slice(0, maxInputChars)}\n…（原文过长已截断）` : text;
   return [
     { role: 'system', content: sys },
@@ -53,6 +68,23 @@ export class SummaryService {
     }
     void this.stream(paperId, kind, text, paperTitle, id, llmBaseUrl, llmApiKey, llmModel);
     return { id };
+  }
+
+  /** 把总结内容写成 Markdown 文件（工作目录）；失败返回 null（不影响入库）。 */
+  private writeMd(paperId: string, kind: SummaryKind, content: string, paperTitle: string): string | null {
+    try {
+      const dir = this.opts.markdownDir;
+      fs.mkdirSync(dir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+      const safeTitle = paperTitle.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'summary';
+      const file = path.join(dir, `${safeTitle}-${kind}-${ts}.md`);
+      fs.writeFileSync(file, `# ${paperTitle}\n\n> 生成时间：${new Date().toLocaleString('zh-CN')} · 类型：${kind === 'full' ? '全文总结' : '选中段落总结'}\n\n${content}\n`, 'utf8');
+      return file;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.log(`[summary] 写 MD 文件失败：${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
   }
 
   private async stream(
@@ -82,7 +114,8 @@ export class SummaryService {
         content += delta;
         this.emit({ id, kind: 'delta', text: delta });
       }
-      this.opts.insertSummary(paperId, kind, content, model);
+      const mdPath = this.writeMd(paperId, kind, content, paperTitle);
+      this.opts.insertSummary(paperId, kind, content, model, mdPath);
       this.emit({ id, kind: 'done' });
     } catch (err) {
       this.emit({ id, kind: 'error', message: err instanceof Error ? err.message : String(err) });

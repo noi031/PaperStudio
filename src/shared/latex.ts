@@ -90,11 +90,15 @@ export function latexToText(src: string | null | undefined): string {
     /\\(?:left|right|big|Big|bigg|Bigg|lvert|rvert|lVert|rVert|middle)\b/g,
     ' ',
   );
-  // 4) 希腊字母与符号宏（长键优先，避免 \rightarrow 被 \to 提前吃掉）
-  const macros = [...Object.entries(GREEK), ...Object.entries(SYMBOLS)].sort(
-    (a, b) => b[0].length - a[0].length,
-  );
-  for (const [k, v] of macros) s = s.split(k).join(v);
+  // 4) 希腊字母与符号宏（长键优先，避免 \rightarrow 被 \to 提前吃掉）。
+  //    单次正则扫描替换（旧的逐宏 split/join 是对全文 O(宏数×n) 的重扫描，
+  //    长文本流式渲染时会造成主线程卡顿）。
+  const macros: Record<string, string> = {};
+  for (const [k, v] of [...Object.entries(GREEK), ...Object.entries(SYMBOLS)].sort((a, b) => b[0].length - a[0].length)) {
+    macros[k] = v;
+  }
+  const macroRe = new RegExp(Object.keys(macros).map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+  s = s.replace(macroRe, (m) => macros[m] ?? m);
   // 5) \cmd{arg} 展开
   s = unwrapCommands(s);
   // 6) 上下标（先带花括号，再单个字符；内容先去空白）

@@ -181,16 +181,61 @@ app.whenReady().then(async () => {
   fs.mkdirSync(storageDir, { recursive: true });
   const exportDir = path.join(storageRoot, 'exports');
   fs.mkdirSync(exportDir, { recursive: true });
+  // 总结 Markdown 文件工作目录（storage/markdown）。
+  const markdownDir = path.join(storageRoot, 'markdown');
+  fs.mkdirSync(markdownDir, { recursive: true });
   const papers = new PaperRepo(db.raw);
   const pdf = new PdfService(storageDir);
   const summaries = new SummaryRepo(db.raw);
   const summary = new SummaryService({
     getSettings: () => db!.getSettings(),
     getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
-    insertSummary: (paperId, kind, content, model) => {
+    markdownDir,
+    insertSummary: (paperId, kind, content, model, mdPath) => {
       // 刷新制：同类型总结覆盖旧的（先删旧再插新），不保留历史。
-      summaries.replace(paperId, kind, content, model);
+      summaries.replace(paperId, kind, content, model, mdPath);
     },
+  });
+  // 查看总结 MD：marked 渲染成 HTML（带 CSP 禁脚本），新窗口打开。
+  ipcMain.handle('markdown:open', async (_e, req: { path: string }) => {
+    try {
+      const file = path.resolve(req.path);
+      if (!file.startsWith(path.resolve(markdownDir))) {
+        return { ok: false, message: '仅允许打开工作目录下的 MD 文件' };
+      }
+      const content = fs.readFileSync(file, 'utf8');
+      // marked 为纯 ESM 包，CJS 主进程用动态 import。
+      const { marked } = await import('marked');
+      const html = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; base-uri 'none'">
+<title>${path.basename(file)}</title>
+<style>
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 0 auto; padding: 32px 40px 80px; color: #1f2328; line-height: 1.7; }
+  h1 { font-size: 24px; border-bottom: 1px solid #d0d7de; padding-bottom: 8px; }
+  h2 { font-size: 19px; margin-top: 28px; border-bottom: 1px solid #eaeef2; padding-bottom: 4px; }
+  h3 { font-size: 16px; } pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; }
+  code { background: #f6f8fa; padding: 2px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 13px; }
+  pre code { background: none; padding: 0; } blockquote { color: #57606a; border-left: 4px solid #d0d7de; margin-left: 0; padding-left: 12px; }
+  table { border-collapse: collapse; } th, td { border: 1px solid #d0d7de; padding: 6px 10px; }
+  a { color: #0969da; } ul, ol { padding-left: 22px; }
+</style></head>
+<body>${marked.parse(content)}</body></html>`;
+      const htmlFile = path.join(markdownDir, '.view', `${path.basename(file, '.md')}.html`);
+      fs.mkdirSync(path.dirname(htmlFile), { recursive: true });
+      fs.writeFileSync(htmlFile, html, 'utf8');
+      const win = new BrowserWindow({
+        width: 1000,
+        height: 820,
+        autoHideMenuBar: true,
+        title: path.basename(file),
+        webPreferences: { contextIsolation: true, nodeIntegration: false },
+      });
+      void win.loadFile(htmlFile);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   registerIpc(ipcMain, {

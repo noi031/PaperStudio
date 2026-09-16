@@ -135,6 +135,9 @@ export class Db {
     if (!hasCol('drafts', 'reference_ids_json')) {
       this.db.exec("ALTER TABLE drafts ADD COLUMN reference_ids_json TEXT NOT NULL DEFAULT '[]'");
     }
+    if (!hasCol('summaries', 'md_path')) {
+      this.db.exec('ALTER TABLE summaries ADD COLUMN md_path TEXT');
+    }
   }
 
   get raw(): Database.Database {

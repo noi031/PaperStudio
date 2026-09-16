@@ -747,7 +747,9 @@ export function ReaderPage({
           {runningStreams.map((s) => (
             <Box key={s.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
               <Typography variant="caption" color="primary">生成中…</Typography>
-              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{latexToText(s.text)}</Typography>
+              {/* 流式预览直接显示原文：总结提示词强制纯文本输出（无 LaTeX），
+                  且每 chunk 对累积全文做 latexToText 会阻塞主线程（卡死） */}
+              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{s.text}</Typography>
             </Box>
           ))}
           {errorStreams.map((s) => (
@@ -897,7 +899,20 @@ export function ReaderPage({
               <ListItem key={s.id} alignItems="flex-start" disableGutters>
                 <ListItemText
                   primary={<Typography variant="caption">{KIND_LABEL[s.kind]} · {new Date(s.createdAt).toLocaleString()}</Typography>}
-                  secondary={<Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{latexToText(s.content).slice(0, 400)}</Typography>}
+                  secondary={
+                    s.mdPath ? (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<OpenInNewIcon />}
+                        onClick={() => void window.paper.invoke('markdown:open', { path: s.mdPath! })}
+                      >
+                        打开 Markdown
+                      </Button>
+                    ) : (
+                      <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{latexToText(s.content).slice(0, 200)}</Typography>
+                    )
+                  }
                 />
               </ListItem>
             ))}

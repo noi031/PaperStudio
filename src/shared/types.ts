@@ -41,9 +41,13 @@ export const DEFAULT_SETTINGS: PaperSettings = {
   echoMemAuthKey: '',
   // 以下提示词与各服务内置默认一致；在设置页可覆盖（留空恢复默认）。
   promptSummarySelected:
-    '你是论文精读助手。用户选中了一段论文原文，请用中文解释这段内容：它在讲什么、在论文中起什么作用、有哪些关键概念。保持简洁，分点输出。数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。',
+    '你是论文精读助手。用户选中了一段论文原文，请用中文解释这段内容：它在讲什么、在论文中起什么作用、有哪些关键概念。' +
+    '输出 Markdown 格式：第一行 # 标题（概括这段内容），用 ## 小节、- 列表、**加粗** 组织，控制在 300-600 字。' +
+    '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。',
   promptSummaryFull:
-    '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分分点输出，语言为中文。数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。',
+    '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分。' +
+    '输出 Markdown 格式：# 标题（论文标题）、## 背景、## 方法、## 结果、## 贡献与局限，用 - 列表和 **加粗** 组织，800-1500 字。' +
+    '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。',
   promptDirections:
     '你是研究方向规划专家。基于用户给出的论文列表，提出 3-5 个有前景、可落地的研究方向。' +
     '每个方向包含：title（简短标题）、description（1-3 句说明：为什么值得做、切入角度）、nextSteps（2-4 条具体下一步）。' +
@@ -145,6 +149,7 @@ export interface IpcContract {
   };
   'summaries:list': { req: { paperId: string }; res: SummaryRecord[] };
   'summary:run': { req: { paperId: string; kind: SummaryKind; text: string }; res: { id: string } };
+  'markdown:open': { req: { path: string }; res: { ok: boolean; message?: string } };
   // ── 行内批注 ──
   'notes:list': { req: { paperId: string }; res: NoteRecord[] };
   'notes:add': {
@@ -251,6 +256,8 @@ export interface SummaryRecord {
   content: string;
   model: string | null;
   createdAt: number;
+  /** 生成的 Markdown 文件绝对路径（工作目录 storage/markdown 下）；旧记录为 null。 */
+  mdPath: string | null;
 }
 
 /** summary:event 推送负载（渲染层 window.paper.onSummaryEvent 订阅）。 */

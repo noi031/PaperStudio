@@ -10,6 +10,7 @@ interface SummaryRow {
   content: string;
   model: string | null;
   created_at: number;
+  md_path: string | null;
 }
 
 function toRecord(r: SummaryRow): SummaryRecord {
@@ -20,6 +21,7 @@ function toRecord(r: SummaryRow): SummaryRecord {
     content: r.content,
     model: r.model,
     createdAt: r.created_at,
+    mdPath: r.md_path ?? null,
   };
 }
 
@@ -42,24 +44,36 @@ export class SummaryRepo {
   }
 
   /** 覆盖式写入：每种总结类型（selected/full）只保留最新一条，插入前先删同类型旧记录。 */
-  replace(paperId: string, kind: SummaryKind, content: string, model: string | null): SummaryRecord {
+  replace(
+    paperId: string,
+    kind: SummaryKind,
+    content: string,
+    model: string | null,
+    mdPath: string | null = null,
+  ): SummaryRecord {
     const tx = this.db.transaction(() => {
       this.db.prepare('DELETE FROM summaries WHERE paper_id = ? AND kind = ?').run(paperId, kind);
       const id = randomUUID();
       this.db
-        .prepare('INSERT INTO summaries (id, paper_id, kind, content, model, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(id, paperId, kind, content, model, Date.now());
+        .prepare('INSERT INTO summaries (id, paper_id, kind, content, model, created_at, md_path) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(id, paperId, kind, content, model, Date.now(), mdPath);
       return id;
     });
     const id = tx();
     return this.get(id)!;
   }
 
-  insert(paperId: string, kind: SummaryKind, content: string, model: string | null): SummaryRecord {
+  insert(
+    paperId: string,
+    kind: SummaryKind,
+    content: string,
+    model: string | null,
+    mdPath: string | null = null,
+  ): SummaryRecord {
     const id = randomUUID();
     this.db
-      .prepare('INSERT INTO summaries (id, paper_id, kind, content, model, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(id, paperId, kind, content, model, Date.now());
+      .prepare('INSERT INTO summaries (id, paper_id, kind, content, model, created_at, md_path) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, paperId, kind, content, model, Date.now(), mdPath);
     return this.get(id)!;
   }
 
