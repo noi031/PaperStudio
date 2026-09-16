@@ -208,7 +208,7 @@ app.whenReady().then(async () => {
       const { marked } = await import('marked');
       const html = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src file: data: https:; base-uri 'none'">
 <title>${path.basename(file)}</title>
 <style>
   body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 0 auto; padding: 32px 40px 80px; color: #1f2328; line-height: 1.7; }
@@ -218,10 +218,12 @@ app.whenReady().then(async () => {
   code { background: #f6f8fa; padding: 2px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 13px; }
   pre code { background: none; padding: 0; } blockquote { color: #57606a; border-left: 4px solid #d0d7de; margin-left: 0; padding-left: 12px; }
   table { border-collapse: collapse; } th, td { border: 1px solid #d0d7de; padding: 6px 10px; }
+  img { max-width: 100%; height: auto; border: 1px solid #eaeef2; border-radius: 4px; }
   a { color: #0969da; } ul, ol { padding-left: 22px; }
 </style></head>
 <body>${marked.parse(content)}</body></html>`;
-      const htmlFile = path.join(markdownDir, '.view', `${path.basename(file, '.md')}.html`);
+      // HTML 与 MD 同目录生成：MD 里的图片引用（images/xxx/fig-N.png）相对路径可解析。
+      const htmlFile = path.join(markdownDir, `${path.basename(file, '.md')}.html`);
       fs.mkdirSync(path.dirname(htmlFile), { recursive: true });
       fs.writeFileSync(htmlFile, html, 'utf8');
       const win = new BrowserWindow({

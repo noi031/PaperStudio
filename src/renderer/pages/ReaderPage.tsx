@@ -61,6 +61,36 @@ async function loadPdfjs() {
 
 const KIND_LABEL: Record<string, string> = { selected: '选中总结', full: '全文总结' };
 
+/** 提取论文含图页（operatorList 含图片绘制指令的页）为 PNG dataURL，供总结图文并茂。 */
+async function extractFigureImages(
+  doc: import('pdfjs-dist').PDFDocumentProxy,
+  maxFigs = 6,
+): Promise<Array<{ page: number; dataUrl: string }>> {
+  const out: Array<{ page: number; dataUrl: string }> = [];
+  const OPS = pdfjs!.OPS;
+  for (let i = 1; i <= doc.numPages && out.length < maxFigs; i++) {
+    try {
+      const page = await doc.getPage(i);
+      const ops = await page.getOperatorList();
+      const hasImage = ops.fnArray.some(
+        (fn: number) => fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject,
+      );
+      if (!hasImage) continue;
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) continue;
+      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+      out.push({ page: i, dataUrl: canvas.toDataURL('image/png') });
+    } catch {
+      // 单页失败跳过，不影响总结
+    }
+  }
+  return out;
+}
+
 /** 归一化文本（去空白）用于片段匹配。 */
 function normText(s: string): string {
   return s.replace(/\s+/g, '');
@@ -604,6 +634,21 @@ export function ReaderPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notes, paperId]);
 
+  const [extracting, setExtracting] = useState(false);
+
+  /** 总结：先提取论文图表页截图（图文并茂），再启动流式生成。 */
+  const handleSummarize = async (kind: 'selected' | 'full', text: string) => {
+    if (!paperId) return;
+    setExtracting(true);
+    try {
+      const doc0 = docRef.current?.doc;
+      const images = doc0 ? await extractFigureImages(doc0, kind === 'full' ? 6 : 3) : [];
+      await startSummary(paperId, kind, text, images);
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const handleAddComment = () => {
     if (!paperId || !selectedText) return;
     void addNote(paperId, pageNum, 'comment', selectedText, commentDraft.trim() || selectedText.slice(0, 100), noteColor).then(() => {
@@ -706,10 +751,10 @@ export function ReaderPage({
           <Button
             variant="contained"
             size="small"
-            disabled={!selectedText || runningStreams.length > 0}
-            onClick={() => paperId && void startSummary(paperId, 'selected', selectedText)}
+            disabled={!selectedText || runningStreams.length > 0 || extracting}
+            onClick={() => void handleSummarize('selected', selectedText)}
           >
-            总结选中段落
+            {extracting ? '提取图表中…' : '总结选中段落'}
           </Button>
           {selectedText && (
             <Typography variant="caption" color="text.secondary" sx={{ maxHeight: 60, overflow: 'auto', display: 'block' }}>
@@ -719,20 +764,18 @@ export function ReaderPage({
           <Button
             variant="outlined"
             size="small"
-            disabled={!fullText || runningStreams.length > 0}
-            onClick={() => paperId && void startSummary(paperId, 'full', fullText)}
+            disabled={!fullText || runningStreams.length > 0 || extracting}
+            onClick={() => void handleSummarize('full', fullText)}
           >
-            {fullText ? '总结全文' : '全文提取中…'}
+            {extracting ? '提取图表中…' : fullText ? '总结全文' : '全文提取中…'}
           </Button>
           <PromptEditor settingKey="promptSummarySelected" label="总结选中段落" hint="「总结选中段落」使用的 AI 提示词" />
           <PromptEditor settingKey="promptSummaryFull" label="总结全文" hint="「总结全文」使用的 AI 提示词" />
 
           {runningStreams.map((s) => (
-            <Box key={s.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-              <Typography variant="caption" color="primary">生成中…</Typography>
-              {/* 流式预览直接显示原文：总结提示词强制纯文本输出（无 LaTeX），
-                  且每 chunk 对累积全文做 latexToText 会阻塞主线程（卡死） */}
-              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{s.text}</Typography>
+            <Box key={s.id} sx={{ p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <CircularProgress size={14} />
+              <Typography variant="caption" color="primary">生成中…（完成后显示 Markdown 链接）</Typography>
             </Box>
           ))}
           {errorStreams.map((s) => (

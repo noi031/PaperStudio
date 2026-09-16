@@ -318,10 +318,32 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
 
   ipcMain.handle('summaries:list', (_e, req: { paperId: string }) => summaries.listByPaper(req.paperId));
 
-  ipcMain.handle('summary:run', (_e, req: { paperId: string; kind: SummaryKind; text: string }) => {
-    const p = papers.get(req.paperId);
-    return summary.run(req.paperId, req.kind, req.text, p?.title ?? '未知论文');
-  });
+  ipcMain.handle(
+    'summary:run',
+    (_e, req: { paperId: string; kind: SummaryKind; text: string; images?: Array<{ page: number; dataUrl: string }> }) => {
+      const p = papers.get(req.paperId);
+      let figList = '';
+      try {
+        // 论文图表截图 → markdown/images/<paperId前8>/fig-<page>.png（与 MD 同工作目录，相对路径可解析）
+        const imgDir = path.join(markdownDir, 'images', req.paperId.slice(0, 8));
+        if (req.images?.length) {
+          fs.mkdirSync(imgDir, { recursive: true });
+          for (const img of req.images) {
+            const b64 = img.dataUrl.split(',')[1];
+            if (!b64) continue;
+            fs.writeFileSync(path.join(imgDir, `fig-${img.page}.png`), Buffer.from(b64, 'base64'));
+          }
+          figList = req.images
+            .map((img) => `第${img.page}页图：images/${req.paperId.slice(0, 8)}/fig-${img.page}.png`)
+            .join('；');
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.log(`[summary] 写图表失败：${err instanceof Error ? err.message : String(err)}`);
+      }
+      return summary.run(req.paperId, req.kind, req.text, p?.title ?? '未知论文', figList);
+    },
+  );
 
   // ── 行内批注 ──────────────────────────────────────────────
   ipcMain.handle('notes:list', (_e, req: { paperId: string }) => notes.listByPaper(req.paperId));

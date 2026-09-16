@@ -24,7 +24,12 @@ interface LibraryStore {
   removePaper: (id: string) => Promise<void>;
   downloadPdf: (id: string) => Promise<{ ok: boolean; path?: string | null; message?: string }>;
   loadSummaries: (paperId: string) => Promise<void>;
-  startSummary: (paperId: string, kind: 'selected' | 'full', text: string) => Promise<void>;
+  startSummary: (
+    paperId: string,
+    kind: 'selected' | 'full',
+    text: string,
+    images?: Array<{ page: number; dataUrl: string }>,
+  ) => Promise<void>;
   handleSummaryEvent: (evt: SummaryEvent) => void;
   loadNotes: (paperId: string) => Promise<void>;
   addNote: (paperId: string, page: number, type: NoteType, text: string, content: string, color?: string | null) => Promise<void>;
@@ -91,8 +96,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     set((s) => ({ summaries: { ...s.summaries, [paperId]: list } }));
   },
 
-  startSummary: async (paperId, kind, text) => {
-    const { id } = await window.paper.invoke('summary:run', { paperId, kind, text });
+  startSummary: async (paperId, kind, text, images) => {
+    const { id } = await window.paper.invoke('summary:run', { paperId, kind, text, images });
     set((s) => ({ streaming: { ...s.streaming, [id]: emptyStream(paperId) } }));
   },
 

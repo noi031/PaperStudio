@@ -27,13 +27,16 @@ export interface SummaryServiceOptions {
   ) => void;
 }
 
-/** 组装 chat 消息（纯函数，供单测）。system 为空时使用内置默认提示词。 */
+/** 组装 chat 消息（纯函数，供单测）。system 为空时使用内置默认提示词。
+ *  figList：论文图表清单（如「第3页图：images/xxx/fig-3.png」），非空时追加到 system，
+ *  引导模型图文并茂（Markdown 图片引用 + 表格）。 */
 export function buildSummaryMessages(
   paperTitle: string,
   kind: SummaryKind,
   text: string,
   system?: string,
   maxInputChars: number = MAX_INPUT_CHARS,
+  figList = '',
 ): Array<{ role: 'system' | 'user'; content: string }> {
   const sys =
     system?.trim() ||
@@ -44,9 +47,16 @@ export function buildSummaryMessages(
       : '你是论文精读助手。请对整篇论文做结构化总结，按「背景 / 方法 / 结果 / 贡献与局限」四部分。' +
         '输出 Markdown 格式：# 标题（论文标题）、## 背景、## 方法、## 结果、## 贡献与局限，用 - 列表和 **加粗** 组织，800-1500 字。' +
         '数学公式一律用纯文本表达（如 γ、B±→D(K0S h′+h′−)h±、x²），禁止使用任何 LaTeX 记号（$、\\(、\\frac、\\gamma 等）。');
+  const figNote = figList
+    ? '\n\n论文图表截图（已保存到工作目录，与总结文件同目录）：' +
+      figList +
+      '。' +
+      '请图文并茂：在总结中与图表相关的小节用 Markdown 图片语法引用（如 ![第3页图](images/xxx/fig-3.png)，路径必须与上面给出的完全一致）；' +
+      '需要对比数据时用 Markdown 表格（如 | 指标 | 数值 |）。'
+    : '';
   const clipped = text.length > maxInputChars ? `${text.slice(0, maxInputChars)}\n…（原文过长已截断）` : text;
   return [
-    { role: 'system', content: sys },
+    { role: 'system', content: sys + figNote },
     { role: 'user', content: `论文标题：${paperTitle}\n\n${clipped}` },
   ];
 }
@@ -81,15 +91,15 @@ export class SummaryService {
     this.opts.getWindow()?.webContents.send('summary:event', payload);
   }
 
-  /** 启动一次流式总结；立即返回 job id，chunk 走 summary:event。 */
-  run(paperId: string, kind: SummaryKind, text: string, paperTitle: string): { id: string } {
+  /** 启动一次流式总结；立即返回 job id，chunk 走 summary:event。figList 为论文图表清单（可选）。 */
+  run(paperId: string, kind: SummaryKind, text: string, paperTitle: string, figList = ''): { id: string } {
     const id = randomUUID();
     const { llmBaseUrl, llmApiKey, llmModel } = this.opts.getSettings();
     if (!llmApiKey) {
       this.emit({ id, kind: 'error', message: '未配置 LLM API Key，请到设置页填写' });
       return { id };
     }
-    void this.stream(paperId, kind, text, paperTitle, id, llmBaseUrl, llmApiKey, llmModel);
+    void this.stream(paperId, kind, text, paperTitle, id, llmBaseUrl, llmApiKey, llmModel, figList);
     return { id };
   }
 
@@ -107,6 +117,7 @@ export class SummaryService {
     baseUrl: string,
     apiKey: string,
     model: string,
+    figList = '',
   ): Promise<void> {
     try {
       const client = new OpenAI({ baseURL: baseUrl || undefined, apiKey });
@@ -114,7 +125,7 @@ export class SummaryService {
       const systemPrompt = kind === 'selected' ? settings.promptSummarySelected : settings.promptSummaryFull;
       const stream = await client.chat.completions.create({
         model,
-        messages: buildSummaryMessages(paperTitle, kind, text, systemPrompt, settings.llmMaxInputChars),
+        messages: buildSummaryMessages(paperTitle, kind, text, systemPrompt, settings.llmMaxInputChars, figList),
         max_tokens: settings.llmMaxOutputTokens || MAX_OUTPUT_TOKENS,
         stream: true,
       });
