@@ -161,10 +161,22 @@ app.whenReady().then(async () => {
   await migrateLegacyData();
   db = openDb(dbPath());
   const appRoot = app.getAppPath();
+  // dsh 引擎日志落盘（storage/logs/dsh-engine.log），排查「运行期已退出」等引擎问题。
+  const engineLogPath = path.join(storageRoot, 'logs', 'dsh-engine.log');
+  fs.mkdirSync(path.dirname(engineLogPath), { recursive: true });
+  const appendEngineLog = (d: string) => {
+    try {
+      fs.appendFileSync(engineLogPath, `[${new Date().toISOString()}] ${d}`);
+    } catch {
+      /* 日志失败不影响运行 */
+    }
+  };
   const host = new AgentHost({
     appRoot,
     userDataDir: app.getPath('userData'),
     settings: () => db!.getSettings(),
+    onStderrLine: (d) => appendEngineLog(`[stderr] ${d}`),
+    onRawLine: (line) => appendEngineLog(`[stdout] ${line}\n`),
   });
   agentService = new AgentService({
     repo: new AgentRepo(db),
