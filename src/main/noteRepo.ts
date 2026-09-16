@@ -12,6 +12,7 @@ interface NoteRow {
   type: string;
   text: string;
   content: string;
+  color: string | null;
   author: string;
   created_at: number;
 }
@@ -24,6 +25,7 @@ function toRecord(r: NoteRow): NoteRecord {
     type: (r.type === 'comment' ? 'comment' : 'highlight') as NoteType,
     text: r.text,
     content: r.content,
+    color: r.color ?? null,
     author: r.author,
     createdAt: r.created_at,
   };
@@ -39,13 +41,21 @@ export class NoteRepo {
     return rows.map(toRecord);
   }
 
-  insert(paperId: string, page: number, type: NoteType, text: string, content: string, author: string): NoteRecord {
+  insert(
+    paperId: string,
+    page: number,
+    type: NoteType,
+    text: string,
+    content: string,
+    author: string,
+    color: string | null = null,
+  ): NoteRecord {
     const id = randomUUID();
     this.db
       .prepare(
-        'INSERT INTO notes (id, paper_id, page, type, anchors_json, text, content, author, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO notes (id, paper_id, page, type, anchors_json, text, content, color, author, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, paperId, page, type, null, text, content, author, Date.now());
+      .run(id, paperId, page, type, null, text, content, color, author, Date.now());
     return this.get(id)!;
   }
 
@@ -54,16 +64,20 @@ export class NoteRepo {
     return row ? toRecord(row) : null;
   }
 
-  /** 更新批注（content/type/text 可改，null/undefined 表示不动）。 */
-  update(id: string, patch: { content?: string | null; type?: NoteType | null; text?: string | null }): NoteRecord | null {
+  /** 更新批注（content/type/text/color 可改，null/undefined 表示不动）。 */
+  update(
+    id: string,
+    patch: { content?: string | null; type?: NoteType | null; text?: string | null; color?: string | null },
+  ): NoteRecord | null {
     const cur = this.get(id);
     if (!cur) return null;
     const content = patch.content !== undefined && patch.content !== null ? patch.content : cur.content;
     const type = patch.type !== undefined && patch.type !== null ? patch.type : cur.type;
     const text = patch.text !== undefined && patch.text !== null ? patch.text : cur.text;
+    const color = patch.color !== undefined ? patch.color : cur.color;
     this.db
-      .prepare('UPDATE notes SET content = ?, type = ?, text = ? WHERE id = ?')
-      .run(content, type, text, id);
+      .prepare('UPDATE notes SET content = ?, type = ?, text = ?, color = ? WHERE id = ?')
+      .run(content, type, text, color, id);
     return this.get(id);
   }
 
@@ -87,6 +101,7 @@ export class NoteRepo {
       type: n.type,
       text: n.text,
       content: n.content,
+      color: n.color,
       author: n.author,
       createdAt: n.createdAt,
     }));
@@ -111,6 +126,7 @@ export class NoteRepo {
         type?: unknown;
         text?: unknown;
         content?: unknown;
+        color?: unknown;
         author?: unknown;
         createdAt?: unknown;
       }>;
@@ -137,6 +153,7 @@ export class NoteRepo {
           null,
           text,
           String(n.content ?? '').trim(),
+          typeof n.color === 'string' && n.color ? n.color : null,
           String(n.author ?? 'me') || 'me',
           Number(n.createdAt) || now,
         );

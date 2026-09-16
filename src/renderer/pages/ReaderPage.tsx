@@ -27,6 +27,7 @@ import 'pdfjs-dist/web/pdf_viewer.css';
 import { useLibraryStore } from '../store/libraryStore';
 import { useAssistantStore } from '../store/assistantStore';
 import { PromptEditor } from '../components/PromptEditor';
+import { NOTE_COLORS } from '../../shared/types';
 import type { SummaryRecord, NoteRecord, NoteType } from '../../shared/types';
 import { latexToText } from '../../shared/latex';
 
@@ -65,6 +66,18 @@ function normText(s: string): string {
   return s.replace(/\s+/g, '');
 }
 
+/** hex 颜色 → rgba 字符串（高亮半透明背景）。 */
+function hexToRgba(hex: string | null | undefined, alpha: number): string {
+  const h = (hex ?? '').replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const num = parseInt(full || 'FFD54D', 16);
+  if (Number.isNaN(num)) return `rgba(255, 213, 79, ${alpha})`;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 /** 渲染后把当前页的批注原文片段高亮到文本层 span 上。 */
 function applyHighlights(
   tl: { textDivs: Array<HTMLSpanElement & { style: CSSStyleDeclaration }> },
@@ -92,7 +105,7 @@ function applyHighlights(
       const s = offsets[i];
       const e = s + norms[i].length;
       if (e <= start || s >= end) continue;
-      divs[i].style.backgroundColor = 'rgba(255, 213, 79, 0.45)';
+      divs[i].style.backgroundColor = hexToRgba(note.color, 0.45);
       divs[i].style.borderRadius = '2px';
     }
   }
@@ -129,10 +142,12 @@ export function ReaderPage({
   const [fullText, setFullText] = useState('');
   const [commentDraft, setCommentDraft] = useState('');
   const [showCommentInput, setShowCommentInput] = useState(false);
+  // 批注高亮颜色（预设色，默认黄）
+  const [noteColor, setNoteColor] = useState<string>(NOTE_COLORS[0]);
   // 批注编辑对话框
   const [editingNote, setEditingNote] = useState<NoteRecord | null>(null);
-  const [editType, setEditType] = useState<NoteType>('comment');
   const [editContent, setEditContent] = useState('');
+  const [editColor, setEditColor] = useState<string>(NOTE_COLORS[0]);
   // 批注导出/导入
   const [noteMsg, setNoteMsg] = useState<string | null>(null);
   const noteImportRef = useRef<HTMLInputElement>(null);
@@ -587,18 +602,9 @@ export function ReaderPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notes, paperId]);
 
-  const handleAddHighlight = () => {
-    if (!paperId || !selectedText) return;
-    void addNote(paperId, pageNum, 'highlight', selectedText, '').then(() => {
-      setSelectedText('');
-      setShowCommentInput(false);
-      setCommentDraft('');
-    });
-  };
-
   const handleAddComment = () => {
     if (!paperId || !selectedText) return;
-    void addNote(paperId, pageNum, 'comment', selectedText, commentDraft.trim() || selectedText.slice(0, 100)).then(() => {
+    void addNote(paperId, pageNum, 'comment', selectedText, commentDraft.trim() || selectedText.slice(0, 100), noteColor).then(() => {
       setSelectedText('');
       setShowCommentInput(false);
       setCommentDraft('');
@@ -613,13 +619,13 @@ export function ReaderPage({
 
   const openEditNote = (n: NoteRecord) => {
     setEditingNote(n);
-    setEditType(n.type);
     setEditContent(n.content);
+    setEditColor(n.color ?? NOTE_COLORS[0]);
   };
 
   const saveEditNote = () => {
     if (!editingNote) return;
-    void updateNote(editingNote.id, { type: editType, content: editContent.trim() }).then(() => {
+    void updateNote(editingNote.id, { content: editContent.trim(), color: editColor }).then(() => {
       setEditingNote(null);
       if (paperId) void loadNotes(paperId);
     });
@@ -785,10 +791,7 @@ export function ReaderPage({
                 选中：{latexToText(selectedText).slice(0, 120)}…
               </Typography>
               <Stack direction="row" spacing={1}>
-                <Button size="small" variant="contained" onClick={handleAddHighlight}>
-                  高亮
-                </Button>
-                <Button size="small" variant="outlined" onClick={() => setShowCommentInput((v) => !v)}>
+                <Button size="small" variant="contained" onClick={() => setShowCommentInput((v) => !v)}>
                   批注
                 </Button>
                 <Button size="small" variant="outlined" color="secondary" onClick={handleSendToAssistant}>
@@ -797,6 +800,19 @@ export function ReaderPage({
               </Stack>
               {showCommentInput && (
                 <Stack spacing={0.5}>
+                  <Stack direction="row" spacing={0.8} sx={{ alignItems: 'center' }}>
+                    <Typography variant="caption" color="text.secondary">高亮颜色</Typography>
+                    {NOTE_COLORS.map((c) => (
+                      <Box
+                        key={c}
+                        onClick={() => setNoteColor(c)}
+                        sx={{
+                          width: 20, height: 20, borderRadius: '50%', bgcolor: c, cursor: 'pointer',
+                          border: noteColor === c ? '2px solid #1976d2' : '2px solid transparent',
+                        }}
+                      />
+                    ))}
+                  </Stack>
                   <TextField
                     size="small"
                     multiline
@@ -864,16 +880,20 @@ export function ReaderPage({
                   原文（第 {editingNote?.page} 页）：{latexToText(editingNote?.text ?? '')}
                 </Typography>
                 <Box>
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>类型</Typography>
-                  <Select
-                    size="small"
-                    fullWidth
-                    value={editType}
-                    onChange={(e) => setEditType(e.target.value as NoteType)}
-                  >
-                    <MenuItem value="comment">批注（评论）</MenuItem>
-                    <MenuItem value="highlight">高亮</MenuItem>
-                  </Select>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>类型：批注（批注即高亮）</Typography>
+                  <Stack direction="row" spacing={0.8} sx={{ alignItems: 'center' }}>
+                    <Typography variant="caption" color="text.secondary">高亮颜色</Typography>
+                    {NOTE_COLORS.map((c) => (
+                      <Box
+                        key={c}
+                        onClick={() => setEditColor(c)}
+                        sx={{
+                          width: 20, height: 20, borderRadius: '50%', bgcolor: c, cursor: 'pointer',
+                          border: editColor === c ? '2px solid #1976d2' : '2px solid transparent',
+                        }}
+                      />
+                    ))}
+                  </Stack>
                 </Box>
                 <TextField
                   label="批注内容"

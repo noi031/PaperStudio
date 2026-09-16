@@ -138,6 +138,9 @@ export class Db {
     if (!hasCol('summaries', 'md_path')) {
       this.db.exec('ALTER TABLE summaries ADD COLUMN md_path TEXT');
     }
+    if (!hasCol('notes', 'color')) {
+      this.db.exec('ALTER TABLE notes ADD COLUMN color TEXT');
+    }
   }
 
   get raw(): Database.Database {

@@ -143,12 +143,14 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
 
   ipcMain.handle(
     'notes:add',
-    (_e, req: { paperId: string; page: number; type: NoteType; text: string; content: string }) =>
-      notes.insert(req.paperId, req.page, req.type, req.text, req.content, db.getSettings().username || 'me'),
+    (_e, req: { paperId: string; page: number; type: NoteType; text: string; content: string; color?: string | null }) =>
+      notes.insert(req.paperId, req.page, req.type, req.text, req.content, db.getSettings().username || 'me', req.color ?? null),
   );
 
-  ipcMain.handle('notes:update', (_e, req: { id: string; content?: string; type?: NoteType; text?: string }) =>
-    notes.update(req.id, req),
+  ipcMain.handle(
+    'notes:update',
+    (_e, req: { id: string; content?: string; type?: NoteType; text?: string; color?: string | null }) =>
+      notes.update(req.id, req),
   );
 
   ipcMain.handle('notes:delete', (_e, req: { id: string }) => {

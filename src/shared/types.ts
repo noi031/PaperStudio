@@ -153,11 +153,11 @@ export interface IpcContract {
   // ── 行内批注 ──
   'notes:list': { req: { paperId: string }; res: NoteRecord[] };
   'notes:add': {
-    req: { paperId: string; page: number; type: NoteType; text: string; content: string };
+    req: { paperId: string; page: number; type: NoteType; text: string; content: string; color?: string | null };
     res: NoteRecord;
   };
   'notes:update': {
-    req: { id: string; content?: string; type?: NoteType; text?: string };
+    req: { id: string; content?: string; type?: NoteType; text?: string; color?: string | null };
     res: NoteRecord | null;
   };
   'notes:delete': { req: { id: string }; res: void };
@@ -270,6 +270,9 @@ export type SummaryEvent =
 
 export type NoteType = 'highlight' | 'comment';
 
+/** 批注高亮颜色预设（hex）。 */
+export const NOTE_COLORS = ['#FFD54D', '#81C784', '#64B5F6', '#F48FB1', '#FFB74D'] as const;
+
 export interface NoteRecord {
   id: string;
   paperId: string;
@@ -279,6 +282,8 @@ export interface NoteRecord {
   text: string;
   /** 批注内容（评论文字；高亮可为空）。 */
   content: string;
+  /** 高亮颜色（hex，如 #FFD54D）；旧记录为 null 时用默认黄。 */
+  color: string | null;
   author: string;
   createdAt: number;
 }
