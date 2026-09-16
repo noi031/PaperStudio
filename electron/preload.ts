@@ -23,4 +23,9 @@ contextBridge.exposeInMainWorld('paper', {
     ipcRenderer.on('summary:event', wrapped);
     return () => ipcRenderer.removeListener('summary:event', wrapped);
   },
+  onSearchEvent: (listener: (payload: unknown) => void) => {
+    const wrapped = (_e: unknown, payload: unknown) => listener(payload);
+    ipcRenderer.on('search:event', wrapped);
+    return () => ipcRenderer.removeListener('search:event', wrapped);
+  },
 });

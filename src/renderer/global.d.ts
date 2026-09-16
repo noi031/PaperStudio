@@ -8,6 +8,7 @@ declare global {
       getPathForFile: (file: File) => string;
       onAgentEvent: (listener: (payload: unknown) => void) => () => void;
       onSummaryEvent: (listener: (payload: SummaryEvent) => void) => () => void;
+      onSearchEvent: (listener: (payload: { stage: 'plan' | 'searching' | 'scoring' }) => void) => () => void;
     };
   }
 }

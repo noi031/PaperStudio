@@ -144,6 +144,17 @@ export interface IpcContract {
     req: { query: string; limit?: number; offset?: number; cursor?: string };
     res: { hits: PaperHit[]; warnings: string[]; nextCursor?: string | null };
   };
+  'search:agentic': {
+    req: { question: string };
+    res: {
+      ok: boolean;
+      hits?: PaperHit[];
+      queries?: string[];
+      relevance?: Record<string, { level: '高' | '中' | '低'; reason: string }>;
+      warnings?: string[];
+      message?: string;
+    };
+  };
   'papers:list': { req: void; res: PaperRecord[] };
   'papers:save': { req: { hit: PaperHit }; res: PaperRecord };
   'papers:delete': { req: { id: string }; res: void };

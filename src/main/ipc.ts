@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { IpcMain } from 'electron';
+import { BrowserWindow } from 'electron';
 import type { Db } from './db';
 import type { PaperSettings } from '../shared/types.js';
 import type { AgentService } from './agentService';
@@ -17,6 +18,7 @@ import type { PresentationRepo } from './presentationRepo';
 import type { NoteRepo } from './noteRepo';
 import type { NoteType } from '../shared/types.js';
 import { search } from './searchService.js';
+import { agenticSearch } from './agenticSearch.js';
 import { generateDirections } from './directionService.js';
 import { generateOutline, writeSection, exportDraft } from './writingService.js';
 import { generateSlides, exportPptx } from './presentationService.js';
@@ -103,6 +105,19 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   ipcMain.handle('search:run', async (_e, req: { query: string; limit?: number; offset?: number; cursor?: string }) =>
     search(req.query, req.limit ?? 10, { s2ApiKey: getSettings().semanticScholarApiKey, oaCursor: req.cursor }, req.offset ?? 0),
   );
+
+  // Agentic 检索：自然语言提问 → LLM 生成查询 → 多源检索合并 → LLM 评估相关度。
+  // 阶段进度经 search:event 推送（plan / searching / scoring）。
+  ipcMain.handle('search:agentic', async (_e, req: { question: string }) => {
+    const win = BrowserWindow.getAllWindows()[0] ?? null;
+    const emit = (stage: 'plan' | 'searching' | 'scoring') => win?.webContents.send('search:event', { stage });
+    try {
+      const result = await agenticSearch(req.question, getSettings(), emit);
+      return { ok: true, ...result };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  });
 
   ipcMain.handle('papers:list', () => papers.list());
 
