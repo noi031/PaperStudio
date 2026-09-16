@@ -812,6 +812,17 @@ export function ReaderPage({
                         }}
                       />
                     ))}
+                    <Tooltip title="自定义颜色">
+                      <input
+                        type="color"
+                        value={noteColor}
+                        onChange={(e) => setNoteColor(e.target.value)}
+                        style={{ width: 26, height: 26, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                      />
+                    </Tooltip>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                      {noteColor.toUpperCase()}
+                    </Typography>
                   </Stack>
                   <TextField
                     size="small"
@@ -893,6 +904,17 @@ export function ReaderPage({
                         }}
                       />
                     ))}
+                    <Tooltip title="自定义颜色">
+                      <input
+                        type="color"
+                        value={editColor}
+                        onChange={(e) => setEditColor(e.target.value)}
+                        style={{ width: 26, height: 26, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
+                      />
+                    </Tooltip>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                      {editColor.toUpperCase()}
+                    </Typography>
                   </Stack>
                 </Box>
                 <TextField
