@@ -5,7 +5,7 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { App } from './App';
 import { installWebBridge } from './webBridge';
 
-// 非 Electron 环境（Echo App Web 版）安装 HTTP+SSE 桥；Electron 下 preload 已注入、此处为 no-op。
+// 安装浏览器版 window.paper 桥（HTTP RPC + SSE，指向 Web(Host) 服务端）。
 installWebBridge();
 import { theme } from './theme';
 

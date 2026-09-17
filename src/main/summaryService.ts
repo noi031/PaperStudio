@@ -1,6 +1,6 @@
 // P3 总结服务：双后端流式总结（dsh: OpenAI 兼容端点真流式；echocap: 平台 model.call，
 // 完成后一次性回调全文）。
-// 增量经 emit('summary:event') 推送（Electron: webContents.send；Web: SSE），
+// 增量经 emit('summary:event') 推送（Web(Host) 版为 SSE 广播），
 // 完成后写入 summaries 表，并生成 Markdown 文件到工作目录（storage/markdown），UI 只展示 MD 链接。
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -23,7 +23,7 @@ export function summaryModelLabel(s: PaperSettings): string {
 
 export interface SummaryServiceOptions {
   getSettings: () => PaperSettings;
-  /** 事件发射器（Electron: webContents.send；Web: SSE 广播）。 */
+  /** 事件发射器（Web(Host) 版为 SSE 广播）。 */
   emit: HostEmit;
   /** 写入 Markdown 文件的工作目录（storage/markdown）。 */
   markdownDir: string;

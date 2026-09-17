@@ -1,8 +1,8 @@
 // SQLite 适配层：优先 better-sqlite3，不可用时回退 Node 内置 node:sqlite。
 //
 // 为什么需要它：
-//  - Electron 桌面版一直用 better-sqlite3（原生模块，需与 Electron 的 V8 ABI 匹配）；
-//  - Echo App Web 版跑在平台 Node 上，若版本与编译期不同，原生模块会直接加载失败；
+//  - 本机/开发环境用 better-sqlite3（原生模块，编译一次即可，速度最快）；
+//  - Echo App Web 版跑在平台 Node 上，若 Node 版本与编译期不同，原生模块会直接加载失败；
 //  - node:sqlite 自 Node 22.5 起内置，无原生依赖，可作为等价回退（同样支持 FTS5/WAL/事务）。
 // 两者对外暴露同一套同步 API：prepare / exec / pragma / transaction / close，
 // 因此 db.ts 与各 Repo 无需感知底层驱动。

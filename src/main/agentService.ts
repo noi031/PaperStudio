@@ -1,6 +1,6 @@
 // agent 编排服务：连接 AI 代理宿主（AgentHost，dsh 引擎或 EchoCap 代理）、
 // 会话仓储（AgentRepo）与渲染进程。负责消息落库、事件累积与事件转发
-// （Electron: webContents.send；Web 版: SSE 广播，经 HostEmit 抽象）。
+// （Web(Host) 版为 SSE 广播，经 HostEmit 抽象）。
 import { randomUUID } from 'node:crypto';
 import type { AgentRepo, AgentSession } from './agentRepo';
 import type { AgentHost, AgentEvent } from './agentHost';
@@ -12,7 +12,7 @@ export interface AgentServiceOptions {
   repo: AgentRepo;
   host: AgentHost;
   getSettings: () => PaperSettings;
-  /** 事件发射器（Electron: webContents.send；Web: SSE 广播）。 */
+  /** 事件发射器（Web(Host) 版为 SSE 广播）。 */
   emit: HostEmit;
 }
 

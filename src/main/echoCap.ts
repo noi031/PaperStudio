@@ -1,6 +1,6 @@
-// EchoCap 能力网关客户端（Electron 主进程专用）。
+// EchoCap 能力网关客户端（主进程/服务端专用）。
 //
-// 背景：本应用的 dsh（deepseek-harness）后端已整体替换为 Echo 平台能力网关
+// 背景：本应用的 dsh（deepseek-harness）后端可整体替换为 Echo 平台能力网关
 // ECHO_CAP。原先「spawn dsh 子进程 + stdio 行分帧 JSON-RPC」的链路，改为通过平台
 // 注入的 Unix Socket 调用 sub_agent.* / model.call.*。
 //

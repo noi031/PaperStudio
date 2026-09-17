@@ -1,8 +1,7 @@
-// Web 宿主装配：把原 electron/main.ts 的服务装配逻辑复用到纯 Node 服务端。
+// Web 宿主装配：服务端应用的全部服务装配逻辑（DB / 仓储 / 服务 / 代理宿主）。
 //
-// Electron 版仍由 electron/main.ts 自行装配窗口与菜单；两版共享同一套 src/main 服务层
-// 与同一份 IPC 契约（通道名、请求/响应形状完全一致），差异只在「谁来实现 HandlerRegistrar
-// 与 HostEmit」：Electron 是 ipcMain + webContents.send，Web 版是 HTTP RPC + SSE。
+// 同一套 src/main 服务层与同一份 IPC 契约（通道名、请求/响应形状完全一致）；
+// HandlerRegistrar 与 HostEmit 由 src/host/server.ts 实现（HTTP RPC + SSE）。
 //
 // AI 后端按 backend.ts 解析（环境变量 / 设置 / EchoCap 自动探测）：
 //  echocap —— Echo 平台注入的 Unix Socket 能力网关（Web 部署默认形态）；

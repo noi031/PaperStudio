@@ -23,10 +23,10 @@ import { generateSlides, exportPptx } from './presentationService.js';
 import { writeSummaryMd } from './summaryService.js';
 import { PDFDocument } from 'pdf-lib';
 
-/** 事件发射器：Electron 下为 webContents.send，Web 版为 SSE 广播。 */
+/** 事件发射器：Web(Host) 版为 SSE 广播（/events）。 */
 export type HostEmit = (type: string, payload: unknown) => void;
 
-/** 通道注册器：Electron 下由 ipcMain 实现，Web 版由 HTTP RPC 适配器实现。 */
+/** 通道注册器：由 HTTP RPC 适配器（src/host/server.ts 的 /rpc/<channel>）实现。 */
 export interface HandlerRegistrar {
   handle(channel: string, fn: (req: any) => unknown): void;
 }

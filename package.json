@@ -1,20 +1,18 @@
 {
   "name": "paperstudio",
   "version": "1.0.0",
-  "description": "论文工作台：检索/阅读/批注/方向/写作/演示 + 双后端 AI 助手（dsh 引擎 / EchoCap 平台网关）",
-  "main": "dist-electron/electron/main.js",
+  "description": "论文工作台（Web）：检索/阅读/批注/方向/写作/演示 + 双后端 AI 助手（dsh 引擎 / EchoCap 平台网关）",
   "scripts": {
     "postinstall": "node scripts/fix-dsh-dupes.mjs",
-    "dev": "npm run rebuild && concurrently -k \"vite\" \"wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "npm run dev:server",
     "dev:renderer": "vite",
+    "dev:server": "npm run build:host && node scripts/start-host.mjs",
     "build": "tsc --noEmit && vite build",
-    "build:main": "tsc -p tsconfig.electron.json",
     "build:host": "tsc -p tsconfig.host.json",
     "verify:echocap": "node scripts/verify-echocap.mjs",
-    "rebuild": "electron-rebuild -f -o better-sqlite3",
-    "start": "npm run rebuild && electron .",
-    "test": "npm rebuild better-sqlite3 && vitest run",
-    "test:watch": "npm rebuild better-sqlite3 && vitest"
+    "start": "npm run build:host && node scripts/start-host.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -40,18 +38,13 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.2.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.5.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
-    "concurrently": "^10.0.5",
-    "cross-env": "^10.1.0",
-    "electron": "^44.3.0",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
-    "vitest": "^5.0.0",
-    "wait-on": "^9.1.0"
+    "vitest": "^5.0.0"
   }
 }

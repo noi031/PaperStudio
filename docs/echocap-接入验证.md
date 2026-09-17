@@ -22,7 +22,7 @@
 - 信封校验：`{ ok, request_id, result }`，`ok=false` 时抛 `EchoCapError(code, message)`；
 - 能力封装：`subAgentSend` / `subAgentQuery` / `modelCall`。
 
-**上层零改动**：`AgentService`、`ipc.ts`、`electron/main.ts`、渲染进程只依赖
+**上层零改动**：`AgentService`、`ipc.ts`、`src/host/server.ts`、渲染进程只依赖
 `AgentHost` 的 `ready / start / on / sendMessage / cancel / close` 与 `AgentEvent` 形状。
 
 ## 2. 能力契约（实测确认）
@@ -87,15 +87,14 @@ POST /v1/capabilities/rpc/model.call.await   params={model_call_request_id, time
 | 项目 | 命令 | 结果 |
 | --- | --- | --- |
 | 类型检查 | `npx tsc --noEmit` | 通过（exit 0） |
-| 单元测试 | `npx vitest run` | 9 文件 / 67 用例全通过 |
-| 主进程构建 | `npm run build:main` | 通过（`dist-electron/`） |
-| 渲染层构建 | `npm run build` | 通过（694 modules，`dist/`） |
+| 单元测试 | `npx vitest run` | 全用例通过 |
+| 服务端构建 | `npm run build:host` | 通过（`dist-host/`） |
+| 渲染层构建 | `npm run build` | 通过（`web/`） |
 | 端到端（真实平台） | `node scripts/verify-echocap.mjs` | 12/12 通过：`model.call` 直连、`AgentHost` 对话往返（running→delta→assistant-message→finish→idle）、渲染产物无凭证 |
 
 ### 未验证项
 
-- **Electron GUI 启动与页面交互**：本环境无法下载 Electron 二进制（GitHub Releases 连接超时），
-  且无 Xvfb/DISPLAY。需在有图形环境处执行 `npm run start` 复核「AI 助手页对话收发」。
+- **Web 页面交互**：需在浏览器打开 `http://127.0.0.1:18080`（`npm run dev:server`）复核「AI 助手页对话收发」。
 - 论文域 MCP 工具已不注入，其原先依赖 dsh 的能力未经运行时复核。
 - 总结/写作/演示/方向建议的真实模型输出质量（仅验证了链路与 `model.call` 往返）。
 

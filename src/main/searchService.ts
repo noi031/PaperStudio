@@ -4,23 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { PaperHit } from '../shared/types.js';
 
-// 主进程 fetch 用 Electron 网络栈（net.fetch）：它走系统代理（与浏览器一致），
-// 而 Node 原生 fetch 是直连——直连出口 IP 常被 arXiv/S2 API 限流（429），
-// 浏览器却能访问。jest/node 环境无 electron 时回退到原生 fetch。
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const electronNet: { fetch: typeof fetch } | null = (() => {
-  // 仅 Electron 运行时才加载 electron 包：Echo App Web 版是纯 Node，
-  // 盲目加载 npm 包会触发二进制下载，把服务启动拖死。
-  if (!process.versions.electron) return null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return require('electron').net ?? null;
-  } catch {
-    return null;
-  }
-})();
+/** 统一网络入口：Web(Host) 版为纯 Node 原生 fetch（无需 Electron 网络栈）。 */
 export function httpFetch(url: string | URL, init?: RequestInit): Promise<Response> {
-  return electronNet && typeof electronNet.fetch === 'function' ? electronNet.fetch(url, init) : fetch(url, init);
+  return fetch(url, init);
 }
 
 const ARXIV_API = 'https://export.arxiv.org/api/query';

@@ -35,7 +35,7 @@
 ## 4. MCP 桥接（dsh-mcp-client）— 已跑通连接
 
 - 插件 `@deepseek-ai/dsh-mcp-client`，`inject:["tools"]`（依赖 dsh-base 已挂载的 `dsh-tools` 服务）。
-- 传输：`stdio`（本地程序）或 `streamable-http`（服务，Electron 主进程方案用这个）。
+- 传输：`stdio`（本地程序，PaperStudio 用这个——Web(Host) 服务端以 `node` 拉起 mcpServer.js）。
 - 配置（新增行必须用 `- insert:` 块）：
   ```yaml
   - insert:
@@ -63,7 +63,7 @@
 
 ## 7. 已定架构决策（用户拍板）
 
-- PaperStudio = 自建 Electron 壳（MUI 统一视觉）；AI 助手页自绘（非官方 web UI）；命令自实现（MVP: /compact /new /resume）。
+- PaperStudio = Web 应用（MUI 统一视觉，Web(Host) 服务端 + React 渲染层）；AI 助手页自绘（非官方 web UI）；命令自实现（MVP: /compact /new /resume）。
 - 论文域能力 → MCP server（P2 起，生产用 streamable-http 挂主进程）。
 - dsh 以子进程嵌入（sdk profile，JSON-RPC stdio），封装在 `agentHost.ts` 单点。
 - 简单流式任务直连 LLM；多步 agentic 任务（方向/检视/写作）走 dsh。

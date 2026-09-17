@@ -102,18 +102,15 @@ export class DshAgentHost implements AgentHost {
     const child = spawn(
       process.execPath,
       // --expose-internals：让 cordis-plugin-loader 走纯 JS require 拿 Node 内部 ESM loader。
-      // 不加时它依赖 node-addon-require-builtin 原生 addon，在 Electron 的 RUN_AS_NODE
-      // 模式下缺少 V8 符号（Unsupported/no-realm）取不到 loader，导致插件树把裸包名
-      // 从顶层 node_modules 解析而找不到 dsh 嵌套插件包（ERR_MODULE_NOT_FOUND）。
+      // 不加时它依赖 node-addon-require-builtin 原生 addon，缺少 V8 符号（Unsupported/no-realm）
+      // 取不到 loader，导致插件树把裸包名从顶层 node_modules 解析而找不到 dsh 嵌套插件包
+      // （ERR_MODULE_NOT_FOUND）。
       ['--expose-internals', this.binPath(), '--profile', 'sdk', '--patch', this.patchPath()],
       {
         cwd: this.opts.appRoot ?? process.cwd(),
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
           ...process.env,
-          // 主进程里 process.execPath 是 electron.exe；用该变量让 dsh bin.js 以纯 Node 运行
-          // （纯 Node 环境跑 verify 脚本时该变量被忽略）。
-          ELECTRON_RUN_AS_NODE: '1',
           DEEPSEEK_API_KEY: s.llmApiKey,
           // 自定义端点 provider 的凭证引用（llm-pi-ai 路由 custom 的 apiKeyEnv）。
           PAPERSTUDIO_LLM_API_KEY: s.llmApiKey,

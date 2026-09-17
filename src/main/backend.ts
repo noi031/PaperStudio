@@ -1,7 +1,7 @@
 // AI 后端解析：PaperStudio 同一套应用代码可跑在两种后端之上。
 //
 //   dsh    本机 deepseek-harness 引擎（子进程 + stdio JSON-RPC + 论文域 MCP 工具），
-//          桌面 Electron 的默认形态，LLM 凭证在设置页配置（OpenAI 兼容端点）。
+//          本地部署的默认形态，LLM 凭证在设置页配置（OpenAI 兼容端点）。
 //   echocap  Echo 平台能力网关（Unix Socket RPC：sub_agent.* / model.call.*），
 //          模型与鉴权由平台提供，Web（Host）部署形态。
 //

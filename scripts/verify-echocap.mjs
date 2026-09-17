@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// EchoCap 替换的端到端验证（不依赖 Electron / GUI）。
+// EchoCap 的端到端验证（纯 Node，不依赖 GUI）。
 //
 // 验证内容：
 //   1) EchoCap 端点可用（socket + 鉴权）
@@ -7,7 +7,7 @@
 //   3) AgentHost 对话收发：sendMessage → sections 轮询 → AgentEvent 归一化
 //   4) 渲染层产物不含 CAP 凭证
 //
-// 用法：node scripts/verify-echocap.mjs
+// 用法：npm run build:host && node scripts/verify-echocap.mjs
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,9 +15,9 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const main = (p) => require(path.join(root, 'dist-electron/src/main', p));
+const main = (p) => require(path.join(root, 'dist-host/src/main', p));
 
-const { AgentHost } = main('agentHost.js');
+const { EchoCapAgentHost } = main('echocapAgentHost.js');
 const { echoCapStatus, modelCall, resolveEndpoint } = main('echoCap.js');
 
 const results = [];
@@ -46,7 +46,7 @@ try {
 
 console.log('\n== 3. AgentHost 对话收发（sub_agent.send + query → AgentEvent）==');
 const sessionId = `verify-${Date.now()}`;
-const host = new AgentHost({ pollMs: 400 });
+const host = new EchoCapAgentHost({ pollMs: 400 });
 const events = [];
 host.on(sessionId, (e) => {
   events.push(e);
@@ -89,7 +89,7 @@ try {
 }
 
 console.log('\n== 4. 凭证不出主进程 ==');
-const assetsDir = path.join(root, 'dist/assets');
+const assetsDir = path.join(root, 'web/assets');
 const key = resolveEndpoint(true).authKey;
 let leaked = [];
 if (fs.existsSync(assetsDir)) {

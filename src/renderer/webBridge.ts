@@ -1,7 +1,6 @@
-// 浏览器版 window.paper 桥：把 Electron preload 的 IPC 桥映射到 HTTP + SSE。
+// 浏览器版 window.paper 桥：把应用 IPC 契约映射到 HTTP RPC + SSE（Web(Host) 服务端）。
 //
-// 仅在「非 Electron 环境」安装（window.paper 不存在时），因此同一套渲染层代码
-// 既能跑在 Electron 里，也能作为 Echo App 的 Web 前端运行，页面与 store 无需改动。
+// 页面与 store 只依赖 window.paper 这一份契约，因此渲染层无需感知传输实现。
 //
 // 契约对齐：
 //   invoke(channel, req)  → POST /rpc/<channel>             （返回 { ok, result }）
@@ -90,7 +89,7 @@ export async function uploadFile(file: File): Promise<string> {
 export function installWebBridge(): void {
   if (typeof window === 'undefined') return;
   const w = window as unknown as { paper?: PaperBridge };
-  if (w.paper) return; // Electron preload 已注入
+  if (w.paper) return; // 已注入（重复调用时避免覆盖）
 
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const streamHandlers = new Map<string, (ev: MessageEvent) => void>();
