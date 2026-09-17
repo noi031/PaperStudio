@@ -1,6 +1,6 @@
 // P3 总结仓储：summaries 表查询与写入。
 import { randomUUID } from 'node:crypto';
-import type { Database } from 'better-sqlite3';
+import type { SqliteDb } from './sqlite.js';
 import type { SummaryKind, SummaryRecord } from '../shared/types.js';
 
 interface SummaryRow {
@@ -26,7 +26,7 @@ function toRecord(r: SummaryRow): SummaryRecord {
 }
 
 export class SummaryRepo {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: SqliteDb) {}
 
   /** 每种总结类型（selected/full）只返回最新一条（刷新制：历史总结已被覆盖删除）。 */
   listByPaper(paperId: string): SummaryRecord[] {

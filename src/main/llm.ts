@@ -1,13 +1,26 @@
-// 主进程 LLM 直连辅助：OpenAI 兼容端点，供方向建议/写作/演示等批量任务使用。
-// 与 SummaryService 同源（settings.llmBaseUrl/llmApiKey/llmModel），不经过 dsh。
+// 主进程 LLM 辅助：供方向建议/写作/演示/总结/agentic 检索等批量任务使用。
+//
+// 双后端：
+//   - dsh 后端：直连 settings.llmBaseUrl/llmApiKey 指向的 OpenAI 兼容端点
+//     （chatText 非流式；chatTextStream 真流式逐块回调增量）。
+//   - echocap 后端：统一经 Echo 平台能力网关 model.call（ECHO_CAP），应用不再需要
+//     用户自备 LLM 端点与 API Key；平台不返回增量正文，因此 chatTextStream 在完成后
+//     一次性回调全文（保留该入口是为了沿用既有「边生成边 emit 增量」的调用结构）。
+//
+// 调用方签名对两种后端完全一致：chatText / chatJson / chatTextStream 按当前 settings
+// 经 resolveBackend() 自动选择实现，无需调用方感知。
 import OpenAI from 'openai';
 import type { PaperSettings } from '../shared/types.js';
+import { resolveBackend } from './backend.js';
+import { modelCall } from './echoCap.js';
 
+/** 校验并返回 API Key（dsh 后端使用；echocap 由平台鉴权，不调用）。 */
 export function requireSettings(s: PaperSettings): string {
   if (!s.llmApiKey) throw new Error('未配置 LLM API Key，请到设置页填写');
   return s.llmApiKey;
 }
 
+/** 创建 OpenAI 兼容客户端（dsh 后端使用）。 */
 export function createClient(s: PaperSettings): OpenAI {
   return new OpenAI({ baseURL: s.llmBaseUrl || undefined, apiKey: s.llmApiKey });
 }
@@ -20,8 +33,32 @@ export interface ChatMessage {
 /** 输出 token 上限：不传时多数服务默认 4096，长文（总结/写作/方向建议）会被截断。 */
 export const MAX_OUTPUT_TOKENS = 8000;
 
-/** 非流式补全，返回完整文本。 */
-export async function chatText(s: PaperSettings, messages: ChatMessage[]): Promise<string> {
+export interface ChatCallOptions {
+  /** 进度回调（echocap 平台只回报已生成字符数；dsh 后端忽略）。 */
+  onProgress?: (chars: number) => void;
+  /** 整体超时（ms，echocap 使用）。 */
+  timeoutMs?: number;
+  modelProfile?: 'primary' | 'fast';
+}
+
+/** 把 chat messages 拆成平台 model.call 需要的 instructions(system) + text(user)。 */
+export function splitMessages(messages: ChatMessage[]): { instructions: string; text: string } {
+  const sys = messages
+    .filter((m) => m.role === 'system')
+    .map((m) => m.content)
+    .filter(Boolean)
+    .join('\n\n');
+  const user = messages
+    .filter((m) => m.role === 'user')
+    .map((m) => m.content)
+    .filter(Boolean)
+    .join('\n\n');
+  if (!user) return { instructions: '', text: sys };
+  return { instructions: sys, text: user };
+}
+
+/** dsh 后端：OpenAI 兼容端点非流式补全。 */
+async function chatTextOpenAI(s: PaperSettings, messages: ChatMessage[]): Promise<string> {
   requireSettings(s);
   const client = createClient(s);
   const res = await client.chat.completions.create({
@@ -34,15 +71,78 @@ export async function chatText(s: PaperSettings, messages: ChatMessage[]): Promi
   return text;
 }
 
+/** echocap 后端：model.call(async) + 轮询 await 直到 done，完成后一次性返回全文。 */
+async function chatTextEchoCap(messages: ChatMessage[], opts: ChatCallOptions): Promise<string> {
+  const { instructions, text } = splitMessages(messages);
+  if (!text) throw new Error('LLM 输入为空');
+  const res = await modelCall(text, {
+    instructions,
+    onProgress: opts.onProgress,
+    timeoutMs: opts.timeoutMs,
+    modelProfile: opts.modelProfile,
+  });
+  if (!res.text) throw new Error('LLM 返回为空');
+  return res.text;
+}
+
+/** 非流式补全，返回完整文本（按当前后端自动选择实现）。 */
+export async function chatText(
+  s: PaperSettings,
+  messages: ChatMessage[],
+  opts: ChatCallOptions = {},
+): Promise<string> {
+  if (resolveBackend(() => s) === 'echocap') return chatTextEchoCap(messages, opts);
+  return chatTextOpenAI(s, messages);
+}
+
+/**
+ * 「流式」补全。dsh 后端真流式（逐块回调增量）；echocap 平台不返回增量正文，
+ * 因此在完成后一次性回调全文。返回完整文本。
+ */
+export async function chatTextStream(
+  s: PaperSettings,
+  messages: ChatMessage[],
+  onDelta: (text: string) => void,
+  opts: ChatCallOptions = {},
+): Promise<string> {
+  if (resolveBackend(() => s) === 'echocap') {
+    const text = await chatTextEchoCap(messages, opts);
+    onDelta(text);
+    return text;
+  }
+  requireSettings(s);
+  const client = createClient(s);
+  const stream = await client.chat.completions.create({
+    model: s.llmModel,
+    messages,
+    max_tokens: s.llmMaxOutputTokens || MAX_OUTPUT_TOKENS,
+    stream: true,
+  });
+  let content = '';
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta?.content;
+    if (!delta) continue;
+    content += delta;
+    onDelta(delta);
+  }
+  if (!content) throw new Error('LLM 返回为空');
+  return content;
+}
+
 /**
  * 非流式补全并要求 JSON 输出。从返回文本中稳健地抽取 JSON 对象/数组：
  * 优先解析 ```json ... ``` 代码块，其次去掉首尾噪声后直接 JSON.parse。
  */
-export async function chatJson<T>(s: PaperSettings, messages: ChatMessage[]): Promise<T> {
-  const text = await chatText(s, [
-    ...messages,
-    { role: 'system', content: '只输出 JSON，不要任何解释、markdown 代码块以外的内容或前后缀文字。' },
-  ]);
+export async function chatJson<T>(
+  s: PaperSettings,
+  messages: ChatMessage[],
+  opts: ChatCallOptions = {},
+): Promise<T> {
+  const text = await chatText(
+    s,
+    [...messages, { role: 'system', content: '只输出 JSON，不要任何解释、markdown 代码块以外的内容或前后缀文字。' }],
+    opts,
+  );
   return extractJson<T>(text);
 }
 

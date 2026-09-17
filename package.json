@@ -1,7 +1,7 @@
 {
   "name": "paperstudio",
   "version": "1.0.0",
-  "description": "论文工作台：检索/阅读/批注/方向/写作/演示 + dsh AI 助手",
+  "description": "论文工作台：检索/阅读/批注/方向/写作/演示 + 双后端 AI 助手（dsh 引擎 / EchoCap 平台网关）",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "postinstall": "node scripts/fix-dsh-dupes.mjs",
@@ -9,6 +9,8 @@
     "dev:renderer": "vite",
     "build": "tsc --noEmit && vite build",
     "build:main": "tsc -p tsconfig.electron.json",
+    "build:host": "tsc -p tsconfig.host.json",
+    "verify:echocap": "node scripts/verify-echocap.mjs",
     "rebuild": "electron-rebuild -f -o better-sqlite3",
     "start": "npm run rebuild && electron .",
     "test": "npm rebuild better-sqlite3 && vitest run",

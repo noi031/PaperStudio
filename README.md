@@ -1,6 +1,6 @@
 # PaperStudio · 论文工作台
 
-面向科研工作流的一站式桌面应用（Electron + React）：**检索论文 → 阅读批注 → AI 总结 → 研究方向建议 → 论文写作（LaTeX）→ 分享 PPT**，并内嵌 dsh AI 助手（可与工作台数据联动）。
+面向科研工作流的一站式应用（Electron 桌面版 / Echo 平台 Web 版）：**检索论文 → 阅读批注 → AI 总结 → 研究方向建议 → 论文写作（LaTeX）→ 分享 PPT**，并内嵌双后端 AI 助手（dsh 引擎 / EchoCap 平台网关，可与工作台数据联动）。
 
 > 本文档的目标：让任何人（包括 AI 代理）**只读这一份 README，就能从零安装依赖、构建并启动 PaperStudio**。所有命令均以 Windows 10/11 + PowerShell 为例；路径含空格的目录（如 `E:\personal files\...`）命令同样有效。
 
@@ -15,7 +15,7 @@
 | 写作 | 以 1 篇主论文 + 多篇参考论文为上下文生成大纲，逐节 AI 撰写 **LaTeX 源码**，导出 `.docx` / `.md` / `.tex` / `.bib`（xelatex 可直接编译） |
 | 方向建议 | 基于论文列表生成 3-5 条创意与研究方向 |
 | 分享 PPT | AI 生成提纲 → 导出 `.pptx` |
-| AI 助手 | dsh 引擎驱动的多会话助手，可调用工作台数据 |
+| AI 助手 | 双后端多会话助手（dsh 引擎 / EchoCap 平台网关，设置页可切换），可与工作台数据联动 |
 
 ---
 
@@ -102,18 +102,20 @@ npm start
 ### 首次启动
 
 1. 应用窗口打开后，进入左侧「设置」页；
-2. 填写 **LLM 配置**（应用所有 AI 能力依赖一个 OpenAI 兼容的 LLM 端点）：
+2. 选择 **AI 后端**（默认为「自动」，无需手工选择）：
 
-   | 字段 | 示例 |
-   |---|---|
-   | Base URL | `http://192.168.1.48:3000/v1`（你自己的端点，需以 `/v1` 结尾） |
-   | 模型名 | `deepseek-v4-flash`（与你的端点匹配） |
-   | API Key | 你的端点密钥 |
+   | 后端 | 适用场景 | 需要配置 |
+   |---|---|---|
+   | `dsh`（本机引擎） | 桌面 Electron 独立使用 | 下方 **LLM 端点 / API Key / 模型名**（OpenAI 兼容端点） |
+   | `echocap`（平台网关） | 运行在 Echo 平台（自动注入 `ECHO_CAP_SOCKET` / `ECHO_CAP_AUTH_KEY`） | 无需任何 LLM 凭证，模型与鉴权由平台提供 |
+   | 自动（推荐） | 检测到 EchoCap 环境则用 echocap，否则用 dsh | 同上，按探测结果而定 |
+
+   也可用环境变量强制指定（优先级最高）：`$env:PAPERSTUDIO_BACKEND = "dsh"` 或 `"echocap"`。
 
    点击「保存」。若已有 C 盘 `%APPDATA%\paperstudio` 旧数据，启动时会被自动复制迁移到项目 `storage/`（首次启动的迁移是幂等的，失败也不影响使用）。
 
 3. 进入「检索」页搜索论文 →「保存」→「下载 PDF」→ 打开阅读器即可用。
-4. 未配置 LLM 时，检索/下载/批注等本地功能仍可用；AI 类功能（总结、写作、方向、PPT、助手）会提示未配置。
+4. 未配置 LLM（dsh 后端）/ 平台网关不可达（echocap 后端）时，检索/下载/批注等本地功能仍可用；AI 类功能（总结、写作、方向、PPT、助手）会提示对应错误。
 
 ---
 
@@ -156,18 +158,31 @@ npm test
 ## 8. 技术架构（给想改代码的人）
 
 ```
-electron/main.ts         # 主进程入口：storage 重定向/迁移、创建窗口、注册 IPC、管理 dsh 引擎
+electron/main.ts         # Electron 主进程入口：storage 重定向/迁移、创建窗口、注册 IPC、托管 AI 代理宿主
+src/host/                # Web(Host) 服务端：Unix Socket HTTP（/rpc 通道 + /events SSE + 静态资源），
+                         #   与 Electron 共用同一套 src/main 服务层与 IPC 契约
 src/main/*.ts            # 主进程服务：db/paperRepo/pdfService(含 pdfjs 提取)/summary 等
 src/shared/types.ts      # IPC 契约（IpcContract）与领域类型（PaperRecord/DraftRecord…）
 src/renderer/            # React 渲染层：页面 + zustand store
   pages/                 #   Library/Search/Reader/Directions/Writing/Presentation/Agent/Settings
-  store/                 #   zustand stores（经 preload 的 window.paper.invoke 调 IPC）
-src/main/agentHost.ts    # dsh 引擎托管：子进程 + MCP 入口注入
+  store/                 #   zustand stores（经 window.paper.invoke 调 IPC；Electron=preload，Web=webBridge）
+src/main/backend.ts      # AI 后端解析：环境变量 > 设置页 aiBackend > EchoCap 自动探测
+src/main/agentHost.ts    # 代理宿主抽象接口 + createAgentHost 工厂
+src/main/dshAgentHost.ts # dsh 引擎托管：子进程 + stdio JSON-RPC + MCP 入口注入
+src/main/echocapAgentHost.ts  # EchoCap 代理托管：sub_agent 回合轮询 → AgentEvent
+src/main/echoCap.ts      # ECHO_CAP 客户端：Unix Socket RPC（sub_agent.send/query、model.call）
+src/main/sqlite.ts       # SQLite 适配层：better-sqlite3 优先，纯 Node 环境回退 node:sqlite
+src/renderer/webBridge.ts     # 浏览器版 window.paper 桥（HTTP RPC + SSE），Electron 下为 no-op
+src/renderer/fileLink.ts      # 服务端绝对路径 → /files/<区>/<文件名> 可下载 URL（Web 版）
 ```
 
-- **IPC 全链路**：按钮 → store action → `window.paper.invoke(channel, payload)` → `ipcMain.handle` → 主进程服务 → 返回。
-- **LLM**：所有 AI 功能直连主进程调用 OpenAI 兼容端点（设置页配置，key 存本地 DB），不经过渲染层。
+- **双后端切换**：`resolveBackend()`（`src/main/backend.ts`）按「环境变量 `PAPERSTUDIO_BACKEND` → 设置页 `aiBackend` → EchoCap 自动探测」解析；`createAgentHost()` 据此选择 `DshAgentHost` 或 `EchoCapAgentHost`，`llm.ts` 的 `chatText/chatJson/chatTextStream` 按同一规则选择 OpenAI 直连或 `model.call`。
+- **IPC 全链路**：按钮 → store action → `window.paper.invoke(channel, payload)` → handler（Electron=`ipcMain.handle`，Web=`POST /rpc/<channel>`）→ 主进程服务 → 返回。
+- **事件推送**：`HostEmit` 抽象——Electron 走 `webContents.send`，Web 版走 `GET /events`（SSE）。
+- **LLM**：dsh 后端直连 OpenAI 兼容端点（设置页配置，key 存本地 DB）；echocap 后端经平台能力网关，应用不持有任何 LLM 凭证。
+- **PDF 下载**：后台任务 + `papers:event` 进度推送（源站限速时整篇可能数分钟，同步等待会被网关判超时）；分片并发下载 + 文件头校验。
 - **PDF 渲染**：pdfjs-dist v5；开发模式从 `/node_modules/pdfjs-dist/` 伺服字体/cmap，构建模式复制到 `dist/`。
+- **Web(Host) 部署**：`npm run build:host` 生成 `dist-host/`（服务端），`npm run build` 生成 `web/` 前端产物；服务端监听 `ECHO_APP_SOCKET`（Unix Socket）或 `ECHO_APP_PORT`，数据目录 `ECHO_APP_DATA_DIR`，前端目录 `ECHO_APP_WEB_DIR`；`npm run verify:echocap` 可验证 EchoCap 网关连通性（详见 `docs/echocap-接入验证.md`）。
 - **打包**：尚未配置 NSIS 安装包；当前以 `npm run dev` / `npm start` 运行。
 
 ---
@@ -180,7 +195,9 @@ src/main/agentHost.ts    # dsh 引擎托管：子进程 + MCP 入口注入
 | 打开 PDF 报 `UnknownErrorException: standardFontDataUrl` | 渲染层产物缺字体目录：重新执行 `npm run build`（开发模式无需处理） |
 | 打开 PDF 报 `Invalid factory url ... must include trailing slash` | 只发生在开发模式加载旧构建缓存：完全停止 `npm run dev`（Ctrl+C 两次）后重新启动 |
 | 检索无结果 / 下载失败 | 检查网络与 arXiv/Semantic Scholar 可达性；「未入库」时先点「保存」再下载 |
-| AI 功能报「未配置 LLM API Key」 | 设置页填写 Base URL / 模型名 / API Key 并保存 |
+| AI 功能报「未配置 LLM API Key」 | dsh 后端：设置页填写 Base URL / 模型名 / API Key 并保存 |
+| AI 功能报「EchoCap 不可用」 | echocap 后端：确认进程运行在注入 `ECHO_CAP_SOCKET` / `ECHO_CAP_AUTH_KEY` 的环境中；或改用 dsh 后端 |
+| PDF 下载一直「下载中」 | 源站（arXiv 等）单连接限速，后台任务可能需数分钟；进度条会持续更新，可先做别的事 |
 | `npm install` 卡在 better-sqlite3 编译 | 补装 VS Build Tools（C++ 桌面开发）+ Python 3 后重试，或使用 npmmirror 镜像 |
 | 端口 5173 被占用 | 关掉占用进程，或改用 `npm run dev:renderer` 只启动前端调试 |
 

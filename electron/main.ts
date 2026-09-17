@@ -1,13 +1,15 @@
-// Electron 主进程入口（薄壳）：创建窗口、注册 IPC、管理 DB 与 dsh 引擎生命周期。
+// Electron 主进程入口（薄壳）：创建窗口、注册 IPC、管理 DB 与 AI 代理宿主生命周期
+// （后端按 backend.ts 解析：本机 dsh 引擎或 Echo 平台 EchoCap 网关）。
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import Database from 'better-sqlite3';
 import { openDb, type Db } from '../src/main/db.js';
-import { registerIpc } from '../src/main/ipc.js';
+import { registerIpc, type HostEmit } from '../src/main/ipc.js';
 import { AgentRepo } from '../src/main/agentRepo.js';
-import { AgentHost } from '../src/main/agentHost.js';
+import { createAgentHost } from '../src/main/agentHost.js';
+import { backendLabel, resolveBackend } from '../src/main/backend.js';
 import { AgentService } from '../src/main/agentService.js';
 import { PaperRepo } from '../src/main/paperRepo.js';
 import { PdfService, resolveStorageDir } from '../src/main/pdfService.js';
@@ -161,8 +163,8 @@ app.whenReady().then(async () => {
   await migrateLegacyData();
   db = openDb(dbPath());
   const appRoot = app.getAppPath();
-  // dsh 引擎日志落盘（storage/logs/dsh-engine.log），排查「运行期已退出」等引擎问题。
-  const engineLogPath = path.join(storageRoot, 'logs', 'dsh-engine.log');
+    // 代理宿主日志落盘（storage/logs/agent-host.log），排查 EchoCap 连接/回合异常。
+    const engineLogPath = path.join(storageRoot, 'logs', 'agent-host.log');
   fs.mkdirSync(path.dirname(engineLogPath), { recursive: true });
   const appendEngineLog = (d: string) => {
     try {
@@ -171,7 +173,13 @@ app.whenReady().then(async () => {
       /* 日志失败不影响运行 */
     }
   };
-  const host = new AgentHost({
+  /** 渲染层事件发射：Electron 下走 webContents.send（Web 版由 SSE 广播替代）。 */
+  const emitToWindow: HostEmit = (type, payload) => {
+    BrowserWindow.getAllWindows()[0]?.webContents.send(type, payload);
+  };
+
+  console.log(`[PaperStudio] AI 后端：${backendLabel(resolveBackend(() => db!.getSettings()))}`);
+  const host = createAgentHost({
     appRoot,
     userDataDir: app.getPath('userData'),
     settings: () => db!.getSettings(),
@@ -182,9 +190,9 @@ app.whenReady().then(async () => {
     repo: new AgentRepo(db),
     host,
     getSettings: () => db!.getSettings(),
-    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    emit: emitToWindow,
   });
-  // MCP 入口在 dsh 引擎首次启动前注入。
+    // 兼容保留：MCP 入口仍注入，但 EchoCap 宿主接收后忽略（代理侧使用平台自带工具集）。
   agentService.setMcpEntry(mcpEntryPath());
 
   const settings = db.getSettings();
@@ -201,7 +209,7 @@ app.whenReady().then(async () => {
   const summaries = new SummaryRepo(db.raw);
   const summary = new SummaryService({
     getSettings: () => db!.getSettings(),
-    getWindow: () => BrowserWindow.getAllWindows()[0] ?? null,
+    emit: emitToWindow,
     markdownDir,
     insertSummary: (paperId, kind, content, model, mdPath) => {
       // 刷新制：同类型总结覆盖旧的（先删旧再插新），不保留历史。
@@ -252,8 +260,12 @@ app.whenReady().then(async () => {
     }
   });
 
-  registerIpc(ipcMain, {
-    db,
+  // ipcMain → HandlerRegistrar 适配：丢弃 IpcMainInvokeEvent，只透传请求体。
+  registerIpc(
+    { handle: (channel, fn) => ipcMain.handle(channel, (_e, req) => fn(req)) },
+    {
+      emit: emitToWindow,
+      db,
     agent: agentService,
     papers,
     pdf,

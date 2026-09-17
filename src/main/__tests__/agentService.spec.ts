@@ -1,4 +1,4 @@
-// agentService.ts 编排单测：聚焦「同一会话连续多回合不重复累积」。
+﻿// agentService.ts 编排单测：聚焦「同一会话连续多回合不重复累积」。
 // 复现场景：每个回合 sendMessage 注册一个 dsh 事件 listener；旧 listener 若未注销，
 // 下一回合的每个事件会同时触发所有累积 listener → 流式输出/落库按倍数重复。
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -116,7 +116,7 @@ function makeService(
     repo,
     host: host as unknown as AgentHost,
     getSettings: () => ({}) as never,
-    getWindow: () => ({ webContents: { send: (_c: string, p: unknown) => emitted.push(p) } }) as never,
+    emit: (_type: string, p: unknown) => emitted.push(p),
   }) as AgentService & { __emitWindow: unknown[] };
   (service as unknown as { __emitWindow: unknown[] }).__emitWindow = emitted;
   return service;

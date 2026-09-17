@@ -1,10 +1,10 @@
-// agentHost.ts 协议映射单测：把 dsh 原始 JSON-RPC 通知归一化为 AgentEvent。
+// dshAgentHost.ts 协议映射单测：把 dsh 原始 JSON-RPC 通知归一化为 AgentEvent。
 // 通过 (host as any).dispatch() 注入协议帧，验证事件路由与载荷提取。
 import { describe, it, expect } from 'vitest';
-import { AgentHost } from '../agentHost';
+import { DshAgentHost } from '../dshAgentHost';
 
 function makeHost() {
-  const host = new AgentHost({
+  const host = new DshAgentHost({
     appRoot: '.',
     userDataDir: '.',
     settings: () => ({}) as never,
@@ -12,13 +12,13 @@ function makeHost() {
   return host;
 }
 
-function collect(host: AgentHost, sessionId: string) {
+function collect(host: DshAgentHost, sessionId: string) {
   const events: unknown[] = [];
   (host as unknown as { on: (s: string, l: (e: unknown) => void) => void }).on(sessionId, (e) => events.push(e));
   return events;
 }
 
-describe('AgentHost 协议映射', () => {
+describe('DshAgentHost 协议映射', () => {
   it('session.status → status 事件', () => {
     const host = makeHost();
     const events = collect(host, 's1');

@@ -1,21 +1,30 @@
-// P3 总结服务：OpenAI 兼容端点流式总结。
-// chunk 经 webContents.send('summary:event') 推送，完成后写入 summaries 表，
-// 并生成 Markdown 文件到工作目录（storage/markdown），UI 只展示 MD 链接。
+// P3 总结服务：双后端流式总结（dsh: OpenAI 兼容端点真流式；echocap: 平台 model.call，
+// 完成后一次性回调全文）。
+// 增量经 emit('summary:event') 推送（Electron: webContents.send；Web: SSE），
+// 完成后写入 summaries 表，并生成 Markdown 文件到工作目录（storage/markdown），UI 只展示 MD 链接。
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import OpenAI from 'openai';
-import type { BrowserWindow } from 'electron';
+import { chatTextStream } from './llm.js';
+import { echoCapStatus } from './echoCap.js';
+import { resolveBackend } from './backend.js';
 import type { PaperSettings, SummaryEvent, SummaryKind } from '../shared/types.js';
+import type { HostEmit } from './ipc.js';
 
 /** 全文总结输入截断上限（防超上下文）；可在设置页调整。 */
 export const MAX_INPUT_CHARS = 120000;
 /** 输出 token 上限；可在设置页调整。 */
 export const MAX_OUTPUT_TOKENS = 8000;
 
+/** 总结入库时记录的模型标识：echocap 为平台侧模型档位，dsh 为设置页模型名。 */
+export function summaryModelLabel(s: PaperSettings): string {
+  return resolveBackend(() => s) === 'echocap' ? 'echocap:primary' : s.llmModel;
+}
+
 export interface SummaryServiceOptions {
   getSettings: () => PaperSettings;
-  getWindow: () => BrowserWindow | null;
+  /** 事件发射器（Electron: webContents.send；Web: SSE 广播）。 */
+  emit: HostEmit;
   /** 写入 Markdown 文件的工作目录（storage/markdown）。 */
   markdownDir: string;
   insertSummary: (
@@ -87,18 +96,25 @@ export class SummaryService {
   constructor(private readonly opts: SummaryServiceOptions) {}
 
   private emit(payload: SummaryEvent): void {
-    this.opts.getWindow()?.webContents.send('summary:event', payload);
+    this.opts.emit('summary:event', payload);
   }
 
-  /** 启动一次流式总结；立即返回 job id，chunk 走 summary:event。figList 为论文图表清单（可选）。 */
+  /** 启动一次流式总结；立即返回 job id，增量走 summary:event。figList 为论文图表清单（可选）。
+   *  前置检查按后端区分：echocap 校验平台网关可达；dsh 校验设置页已配 LLM API Key。 */
   run(paperId: string, kind: SummaryKind, text: string, paperTitle: string, figList = ''): { id: string } {
     const id = randomUUID();
-    const { llmBaseUrl, llmApiKey, llmModel } = this.opts.getSettings();
-    if (!llmApiKey) {
+    const settings = this.opts.getSettings();
+    if (resolveBackend(() => settings) === 'echocap') {
+      const cap = echoCapStatus();
+      if (!cap.ok) {
+        this.emit({ id, kind: 'error', message: `EchoCap 不可用：${cap.message}` });
+        return { id };
+      }
+    } else if (!settings.llmApiKey) {
       this.emit({ id, kind: 'error', message: '未配置 LLM API Key，请到设置页填写' });
       return { id };
     }
-    void this.stream(paperId, kind, text, paperTitle, id, llmBaseUrl, llmApiKey, llmModel, figList);
+    void this.stream(paperId, kind, text, paperTitle, id, figList);
     return { id };
   }
 
@@ -107,36 +123,33 @@ export class SummaryService {
     return writeSummaryMd(this.opts.markdownDir, paperId, kind, content, paperTitle);
   }
 
+  /** 生成一份总结（按后端走 chatTextStream：dsh 真流式逐块 emit；echocap 完成后一次性 emit）。 */
   private async stream(
     paperId: string,
     kind: SummaryKind,
     text: string,
     paperTitle: string,
     id: string,
-    baseUrl: string,
-    apiKey: string,
-    model: string,
     figList = '',
   ): Promise<void> {
     try {
-      const client = new OpenAI({ baseURL: baseUrl || undefined, apiKey });
       const settings = this.opts.getSettings();
       const systemPrompt = kind === 'selected' ? settings.promptSummarySelected : settings.promptSummaryFull;
-      const stream = await client.chat.completions.create({
-        model,
-        messages: buildSummaryMessages(paperTitle, kind, text, systemPrompt, settings.llmMaxInputChars, figList),
-        max_tokens: settings.llmMaxOutputTokens || MAX_OUTPUT_TOKENS,
-        stream: true,
-      });
+      const messages = buildSummaryMessages(
+        paperTitle,
+        kind,
+        text,
+        systemPrompt,
+        settings.llmMaxInputChars,
+        figList,
+      );
       let content = '';
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content;
-        if (!delta) continue;
+      await chatTextStream(settings, messages, (delta) => {
         content += delta;
         this.emit({ id, kind: 'delta', text: delta });
-      }
+      });
       const mdPath = this.writeMd(paperId, kind, content, paperTitle);
-      this.opts.insertSummary(paperId, kind, content, model, mdPath);
+      this.opts.insertSummary(paperId, kind, content, summaryModelLabel(settings), mdPath);
       this.emit({ id, kind: 'done' });
     } catch (err) {
       this.emit({ id, kind: 'error', message: err instanceof Error ? err.message : String(err) });

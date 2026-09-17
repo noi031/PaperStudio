@@ -1,6 +1,6 @@
 // P5 方向建议仓储：directions 表读写。
 import { randomUUID } from 'node:crypto';
-import type { Database } from 'better-sqlite3';
+import type { SqliteDb } from './sqlite.js';
 import type { DirectionRecord, DirectionSuggestion } from '../shared/types.js';
 
 interface DirectionRow {
@@ -22,7 +22,7 @@ function toRecord(r: DirectionRow): DirectionRecord {
 }
 
 export class DirectionRepo {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: SqliteDb) {}
 
   list(): DirectionRecord[] {
     const rows = this.db.prepare('SELECT * FROM directions ORDER BY created_at DESC').all() as DirectionRow[];

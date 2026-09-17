@@ -9,6 +9,9 @@ import type { PaperHit } from '../shared/types.js';
 // 浏览器却能访问。jest/node 环境无 electron 时回退到原生 fetch。
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const electronNet: { fetch: typeof fetch } | null = (() => {
+  // 仅 Electron 运行时才加载 electron 包：Echo App Web 版是纯 Node，
+  // 盲目加载 npm 包会触发二进制下载，把服务启动拖死。
+  if (!process.versions.electron) return null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     return require('electron').net ?? null;
@@ -358,14 +361,231 @@ export async function search(
   return result;
 }
 
-/** 下载 PDF 到 dir/<safeName>.pdf；返回绝对路径。 */
-export async function downloadPdf(pdfUrl: string, dir: string, safeName: string): Promise<string> {
-  fs.mkdirSync(dir, { recursive: true });
-  const res = await fetchWithRetry(pdfUrl, { headers: { 'User-Agent': UA } }, { label: 'PDF', maxRetries: 2 });
+/** 下载进度：loaded 为已接收字节数，total 为源站声明的总长度（未知时 null）。 */
+export interface DownloadProgress {
+  loaded: number;
+  total: number | null;
+}
+
+export interface DownloadOptions {
+  onProgress?: (progress: DownloadProgress) => void;
+  /** 并行分片数：arXiv(Fastly) 等站点对单连接限速只有几 KB/s，分片能数倍提速。 */
+  concurrency?: number;
+  /** 单次请求超时（毫秒）。 */
+  timeoutMs?: number;
+}
+
+const PDF_MAGIC = '%PDF-';
+// 低于该体积不分片（分片请求自带固定开销）。
+const MIN_PART_BYTES = 384 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+const PARTS_MAX = 6;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 判断字节内容是否为 PDF（避免把网关错误页/HTML 当成论文存盘）。 */
+export function isPdfBytes(buf: Buffer): boolean {
+  return buf.subarray(0, PDF_MAGIC.length).toString('latin1') === PDF_MAGIC;
+}
+
+/** 读取文件头判断是否为 PDF；读取失败一律视为非 PDF。 */
+export function isPdfFile(file: string): boolean {
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const head = Buffer.alloc(PDF_MAGIC.length);
+      const read = fs.readSync(fd, head, 0, head.length, 0);
+      return read === head.length && isPdfBytes(head);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** 从 content-range: bytes 0-0/2215244 解析总长度。 */
+function totalFromContentRange(value: string | null): number | null {
+  const m = /\/(\d+)\s*$/.exec(value ?? '');
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+type StreamLike = {
+  getReader?: () => { read: () => Promise<{ value?: Uint8Array; done: boolean }> };
+  [Symbol.asyncIterator]?: () => AsyncIterator<Uint8Array>;
+};
+
+/** 统一遍历响应体：优先异步迭代，退化为 getReader（Electron net.fetch 与 Node fetch 都覆盖）。 */
+async function* iterateBody(body: ReadableStream<Uint8Array>): AsyncGenerator<Uint8Array> {
+  const streamLike = body as unknown as StreamLike;
+  if (typeof streamLike[Symbol.asyncIterator] === 'function') {
+    for await (const part of body as unknown as AsyncIterable<Uint8Array>) yield part;
+    return;
+  }
+  const reader = streamLike.getReader?.();
+  if (!reader) throw new Error('响应体不可读');
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) return;
+    if (chunk.value) yield chunk.value;
+  }
+}
+
+/**
+ * 探测 PDF 体积与 Range 支持：只取 1 字节拿元信息，避免为了探路再拉一次全文。
+ * 源站忽略 Range 时会直接回 200 全文，此时把正文交给调用方复用。
+ */
+async function probePdf(
+  pdfUrl: string,
+  timeoutMs: number,
+): Promise<{ total: number | null; ranges: boolean; body: Buffer | null }> {
+  const res = await httpFetch(pdfUrl, {
+    headers: { 'User-Agent': UA, Range: 'bytes=0-0' },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   if (!res.ok) throw new Error(`PDF HTTP ${res.status}`);
+  if (res.status === 206) {
+    const total = totalFromContentRange(res.headers.get('content-range'));
+    return { total, ranges: total !== null, body: null };
+  }
   const buf = Buffer.from(await res.arrayBuffer());
+  return { total: buf.length, ranges: false, body: buf };
+}
+
+/** 分片下载：流式写入 fd 的 [start, end] 区间，逐块上报进度，失败按次重试。 */
+async function downloadRangeToFd(
+  pdfUrl: string,
+  fd: number,
+  start: number,
+  end: number,
+  timeoutMs: number,
+  onChunk: (bytes: number) => void,
+): Promise<void> {
+  const expect = end - start + 1;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let pos = start;
+    try {
+      const res = await httpFetch(pdfUrl, {
+        headers: { 'User-Agent': UA, Range: `bytes=${start}-${end}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status !== 206) throw new Error(`PDF 分片 HTTP ${res.status}`);
+      if (!res.body) throw new Error('PDF 分片响应为空');
+      for await (const part of iterateBody(res.body)) {
+        const buf = Buffer.from(part);
+        fs.writeSync(fd, buf, 0, buf.length, pos);
+        pos += buf.length;
+        onChunk(buf.length);
+        if (pos - start >= expect) break;
+      }
+      if (pos - start !== expect) throw new Error(`PDF 分片长度不符（${pos - start}/${expect}）`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      onChunk(-(pos - start)); // 重试前回退本次已计入的进度
+      if (attempt < 2) await sleep(1500 * (attempt + 1));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('PDF 分片下载失败');
+}
+
+/** 整篇流式下载（源站不支持 Range 或分片失败时使用），从头覆盖写入 fd。 */
+async function downloadAllToFd(
+  pdfUrl: string,
+  fd: number,
+  timeoutMs: number,
+  onChunk: (bytes: number) => void,
+): Promise<void> {
+  const res = await httpFetch(pdfUrl, {
+    headers: { 'User-Agent': UA },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`PDF HTTP ${res.status}`);
+  if (!res.body) throw new Error('PDF 响应为空');
+  fs.ftruncateSync(fd, 0);
+  let pos = 0;
+  for await (const part of iterateBody(res.body)) {
+    const buf = Buffer.from(part);
+    fs.writeSync(fd, buf, 0, buf.length, pos);
+    pos += buf.length;
+    onChunk(buf.length);
+  }
+  fs.ftruncateSync(fd, pos);
+}
+
+/**
+ * 下载 PDF 到 dir/<safeName>.pdf；返回绝对路径。
+ *
+ * 对应线上问题「下载 PDF 报 Bad Gateway」的两处修复：
+ *  1) 分片并发：arXiv 单连接只有几 KB/s，2MB 论文要数分钟，网关会先超时；
+ *  2) 流式 + 进度回调：调用方可把它放后台任务并上报进度，不再让长请求卡在网关。
+ */
+export async function downloadPdf(
+  pdfUrl: string,
+  dir: string,
+  safeName: string,
+  options: DownloadOptions = {},
+): Promise<string> {
+  fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`);
-  fs.writeFileSync(filePath, buf);
+  const tmpPath = `${filePath}.part`;
+  const timeoutMs = options.timeoutMs ?? DOWNLOAD_TIMEOUT_MS;
+  let loaded = 0;
+  let total: number | null = null;
+  const onChunk = (bytes: number): void => {
+    loaded += bytes;
+    options.onProgress?.({ loaded, total });
+  };
+
+  const probe = await probePdf(pdfUrl, Math.min(timeoutMs, 120_000));
+  total = probe.total;
+  if (probe.body) {
+    if (!isPdfBytes(probe.body)) throw new Error('下载内容不是有效的 PDF（源站可能返回了错误页）');
+    fs.writeFileSync(filePath, probe.body);
+    onChunk(probe.body.length);
+    return filePath;
+  }
+
+  const fd = fs.openSync(tmpPath, 'w');
+  try {
+    const parts =
+      total && total > MIN_PART_BYTES
+        ? Math.min(options.concurrency ?? 5, PARTS_MAX, Math.max(2, Math.ceil(total / MIN_PART_BYTES)))
+        : 0;
+    if (parts >= 2 && total) {
+      const size = Math.ceil(total / parts);
+      const jobs: Array<Promise<void>> = [];
+      for (let i = 0; i < parts; i += 1) {
+        const start = i * size;
+        const end = Math.min(total - 1, start + size - 1);
+        if (start > end) break;
+        jobs.push(downloadRangeToFd(pdfUrl, fd, start, end, timeoutMs, onChunk));
+      }
+      try {
+        await Promise.all(jobs);
+      } catch {
+        // 分片整体失败（站点不支持 206 / 连接被重置）：退回单连接整篇重下。
+        loaded = 0;
+        options.onProgress?.({ loaded: 0, total });
+        await downloadAllToFd(pdfUrl, fd, timeoutMs, onChunk);
+      }
+    } else {
+      await downloadAllToFd(pdfUrl, fd, timeoutMs, onChunk);
+    }
+    const size = fs.fstatSync(fd).size;
+    if (total && size !== total) throw new Error(`PDF 体积不符（${size}/${total}）`);
+    if (!isPdfFile(tmpPath)) throw new Error('下载内容不是有效的 PDF（源站可能返回了错误页）');
+  } catch (err) {
+    fs.closeSync(fd);
+    fs.rmSync(tmpPath, { force: true });
+    throw err;
+  }
+  fs.closeSync(fd);
+  fs.renameSync(tmpPath, filePath);
   return filePath;
 }
 

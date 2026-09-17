@@ -1,16 +1,19 @@
-// agent 编排服务：连接 dsh 引擎（AgentHost）、会话仓储（AgentRepo）与渲染进程。
-// 负责消息落库、事件累积与 webContents 转发。
+// agent 编排服务：连接 AI 代理宿主（AgentHost，dsh 引擎或 EchoCap 代理）、
+// 会话仓储（AgentRepo）与渲染进程。负责消息落库、事件累积与事件转发
+// （Electron: webContents.send；Web 版: SSE 广播，经 HostEmit 抽象）。
 import { randomUUID } from 'node:crypto';
-import type { BrowserWindow } from 'electron';
 import type { AgentRepo, AgentSession } from './agentRepo';
 import type { AgentHost, AgentEvent } from './agentHost';
+import type { HostEmit } from './ipc';
+import { backendLabel, resolveBackend } from './backend';
 import type { PaperSettings } from '../shared/types.js';
 
 export interface AgentServiceOptions {
   repo: AgentRepo;
   host: AgentHost;
   getSettings: () => PaperSettings;
-  getWindow: () => BrowserWindow | null;
+  /** 事件发射器（Electron: webContents.send；Web: SSE 广播）。 */
+  emit: HostEmit;
 }
 
 interface StreamState {
@@ -22,24 +25,24 @@ interface StreamState {
 
 export class AgentService {
   private streams = new Map<string, StreamState>();
-  /** sessionId → 当前回合 dsh 事件监听注销函数；新回合/结束/删除时注销，防重复累积。 */
+  /** sessionId → 当前回合宿主事件监听注销函数；新回合/结束/删除时注销，防重复累积。 */
   private streamOffs = new Map<string, () => void>();
   private started = false;
   private version = '';
   private mcpEntry = '';
-  /** in-flight 启动 promise：并发 ensureStarted 共享同一次启动，防重复 spawn。 */
+  /** in-flight 启动 promise：并发 ensureStarted 共享同一次启动，防重复拉起。 */
   private starting: Promise<string> | null = null;
-  /** 引擎启动后已被轮换 dshSessionId 的会话：其首条消息需注入历史上下文（引擎侧记忆已丢）。 */
+  /** 宿主启动后已被轮换会话 id 的会话：其首条消息需注入历史上下文（宿主侧记忆已丢）。 */
   private rotatedSessions = new Set<string>();
 
   constructor(private readonly opts: AgentServiceOptions) {}
 
-  /** 注入论文域 MCP server 的 stdio 入口（编译产物路径），启动 dsh 前调用。 */
+  /** 注入论文域 MCP server 的 stdio 入口（编译产物路径），启动 dsh 前调用；echocap 下忽略。 */
   setMcpEntry(entry: string): void {
     this.mcpEntry = entry;
   }
 
-  /** 确保 dsh 引擎已启动（幂等 + 并发安全）。 */
+  /** 确保代理宿主已启动（幂等 + 并发安全）。 */
   async ensureStarted(): Promise<string> {
     if (this.started && this.opts.host.ready) return this.version;
     if (!this.starting) {
@@ -48,7 +51,7 @@ export class AgentService {
         .then((v) => {
           this.version = v;
           this.started = true;
-          // 引擎（重新）启动：旧进程的 dshSessionId 已全部失效，
+          // 宿主（重新）启动：旧进程的会话 id 已全部失效，
           // 轮换为新 id（下次 prompt 走「新建会话」路径），并标记会话：首条消息注入历史。
           this.opts.repo.rotateAllDshSessionIds();
           for (const s of this.opts.repo.listSessions()) this.rotatedSessions.add(s.id);
@@ -62,9 +65,9 @@ export class AgentService {
   }
 
   health(): { ok: boolean; version?: string; message?: string } {
-    if (this.started && this.opts.host.ready)
-      return { ok: true, version: this.version };
-    return { ok: false, message: this.started ? 'dsh 引擎未就绪' : 'dsh 引擎未启动（P2 后可用）' };
+    if (this.started && this.opts.host.ready) return { ok: true, version: this.version };
+    const label = backendLabel(resolveBackend(this.opts.getSettings));
+    return { ok: false, message: this.started ? `${label}未就绪` : `${label}未启动` };
   }
 
   listSessions(): AgentSession[] {
@@ -73,7 +76,7 @@ export class AgentService {
 
   createSession(title: string, context: string): AgentSession {
     const s = this.opts.repo.createSession(title, randomUUID(), JSON.stringify({ context }));
-    // 带上下文的会话（如「发送到助手」）：首条消息即上下文，发给 dsh 作为会话起点。
+    // 带上下文的会话（如「发送到助手」）：首条消息即上下文，发给宿主作为会话起点。
     if (context) {
       void this.sendMessage(s.id, context).catch((err) => {
         this.emitToWindow({
@@ -97,12 +100,12 @@ export class AgentService {
     return this.opts.repo.listMessages(sessionId);
   }
 
-  /** 发一条用户消息：落库 → 送 dsh → 订阅事件流（累积 + 转发 + 落库）。
-   *  rotated 会话（引擎重启/打断后已换新 dsh 会话）首条消息注入历史上下文，
-   *  让新引擎会话能「接上」之前的对话。 */
+  /** 发一条用户消息：落库 → 送宿主 → 订阅事件流（累积 + 转发 + 落库）。
+   *  rotated 会话（宿主重启/打断后已换新会话 id）首条消息注入历史上下文，
+   *  让新宿主会话能「接上」之前的对话。 */
   async sendMessage(sessionId: string, text: string): Promise<void> {
-    // 先确保引擎已启动：首次启动会轮换所有会话的 dshSessionId，
-    // 因此 session（含最新 dshSessionId）必须在 ensureStarted 之后重新读取。
+    // 先确保宿主已启动：首次启动会轮换所有会话的会话 id，
+    // 因此 session（含最新会话 id）必须在 ensureStarted 之后重新读取。
     await this.ensureStarted();
 
     const session = this.opts.repo.getSession(sessionId);
@@ -145,7 +148,7 @@ export class AgentService {
     }
   }
 
-  /** 组装会话历史摘要（最近若干条 user/assistant 消息），用于注入轮换后的新 dsh 会话。
+  /** 组装会话历史摘要（最近若干条 user/assistant 消息），用于注入轮换后的新宿主会话。
    *  注意：刚落库的当前 user 消息已在数组末尾，需排除，避免历史里重复一遍。 */
   private buildHistoryContext(sessionId: string): string {
     const msgs = this.opts.repo.listMessages(sessionId);
@@ -160,7 +163,7 @@ export class AgentService {
       })
       .filter((x): x is string => !!x);
     if (recent.length === 0) return '';
-    return `【以下是本会话此前的对话历史（引擎会话已重置，供你接续上下文）：】\n${recent.join('\n')}`;
+    return `【以下是本会话此前的对话历史（宿主会话已重置，供你接续上下文）：】\n${recent.join('\n')}`;
   }
 
   private async handleEvent(sessionId: string, e: AgentEvent, st: StreamState): Promise<void> {
@@ -183,7 +186,7 @@ export class AgentService {
         this.emitToWindow({ type: 'title', sessionId, title: e.title });
         break;
       case 'user':
-        // 回显 dsh 侧注入的用户消息（含 runtime context 时不重复落库）。
+        // 回显宿主侧注入的用户消息（含 runtime context 时不重复落库）。
         break;
       case 'text-delta':
         st.text += e.text;
@@ -202,7 +205,7 @@ export class AgentService {
         break;
       case 'finish':
         st.finished = true;
-        // 落库统一走 assistant/message（dsh 每 step 一条完整消息，紧随 finish chunk 到达）。
+        // 落库统一走 assistant/message（宿主每回合/每 step 一条完整消息）。
         // finish 本身不落库：工具循环里每个 step 都以 finish 结束，若按此刻累积文本落库，
         // 跨 step 会重复落库成「越来越长」的重复回复。清空累积避免误用。
         st.reasoning = '';
@@ -210,8 +213,8 @@ export class AgentService {
         this.emitToWindow({ type: 'finish', sessionId, reason: e.reason });
         break;
       case 'assistant-message': {
-        // dsh 每 step 一条完整消息：先 reasoning 后 text（与 chunk 流顺序一致），
-        // 内容是 dsh 组装好的 blocks，整回合落库次数由 dsh 保证（每 step 恰好一次）。
+        // 每回合一条完整消息：先 reasoning 后 text（与 delta 流顺序一致），
+        // 整回合落库次数由宿主保证（每回合/每 step 恰好一次）。
         if (e.reasoning) push('reasoning', e.reasoning);
         if (e.text) push('text', e.text);
         break;
@@ -223,18 +226,17 @@ export class AgentService {
   }
 
   private emitToWindow(payload: unknown): void {
-    this.opts.getWindow()?.webContents.send('agent:event', payload);
+    this.opts.emit('agent:event', payload);
   }
 
   /**
-   * 打断当前回合（Esc）：先尝试通知 dsh 引擎 cancel，再清理本地流状态。
-   * 注意：本机 dsh SDK 协议白名单只有 initialize / session/prompt / shutdown，
-   * 无 session 级打断 RPC（session/cancel 仅存在于 UI 侧 client-connection 的
-   * fixture 实现），因此引擎侧旧回合无法真正终止——它会在后台自然跑完并
-   * 被丢弃（listener 已注销，不再转发）。
-   * 关键：打断后立即轮换该会话的 dshSessionId——若复用旧 id，下一条消息会
-   * 被引擎排队到旧回合跑完才执行（表现为「继续对话没回复」）。换新 id 后下一条
-   * 消息走全新 dsh 会话立刻执行，并自动注入会话历史上下文（首条消息）。
+   * 打断当前回合（Esc）：先尝试通知宿主 cancel，再清理本地流状态。
+   * 注意：两种宿主对 session 级打断的支持都有限——dsh 本机 SDK 协议白名单无
+   * session/cancel RPC，旧回合会在后台自然跑完并被丢弃（listener 已注销）；
+   * echocap 平台无回合级取消 RPC，cancel 仅停止本地轮询。
+   * 关键：打断后立即轮换该会话的会话 id——若复用旧 id，下一条消息会
+   * 被宿主排队到旧回合跑完才执行（表现为「继续对话没回复」）。换新 id 后下一条
+   * 消息走全新宿主会话立刻执行，并自动注入会话历史上下文（首条消息）。
    */
   async stop(sessionId: string): Promise<void> {
     const session = this.opts.repo.getSession(sessionId);
@@ -242,13 +244,13 @@ export class AgentService {
     try {
       await this.opts.host.cancel(session.dshSessionId);
     } catch (err) {
-      // 本机引擎不支持 session/cancel：忽略错误，本地状态照常清理。
-      console.warn('[AgentService] cancel 失败（引擎可能不支持）:', err instanceof Error ? err.message : err);
+      // 宿主可能不支持取消：忽略错误，本地状态照常清理。
+      console.warn('[AgentService] cancel 失败（宿主可能不支持）:', err instanceof Error ? err.message : err);
     }
     this.streams.delete(sessionId);
     this.streamOffs.get(sessionId)?.();
     this.streamOffs.delete(sessionId);
-    // 轮换 dshSessionId：下次 sendMessage 走新 dsh 会话，立即可回复；首条注入历史。
+    // 轮换会话 id：下次 sendMessage 走新宿主会话，立即可回复；首条注入历史。
     this.opts.repo.rotateDshSessionId(sessionId);
     this.rotatedSessions.add(sessionId);
     // 通知渲染进程：回合被用户打断（收尾流式缓冲）。
@@ -256,7 +258,7 @@ export class AgentService {
     this.emitToWindow({ type: 'finish', sessionId, reason: 'interrupted' });
   }
 
-  /** 关闭 dsh 引擎（应用退出时）。 */
+  /** 关闭代理宿主（应用退出时）。 */
   async dispose(): Promise<void> {
     this.started = false;
     this.streams.clear();

@@ -24,6 +24,8 @@ export interface PaperSettings {
   promptSection: string;
   /** Semantic Scholar API key（可选）：无 key 检索限流极严（429），配 key 可大幅提高额度。 */
   semanticScholarApiKey: string;
+  /** AI 后端：'dsh'（本机 dsh 引擎）/ 'echocap'（Echo 平台能力网关）/ ''（自动：检测到 EchoCap 环境则 echocap，否则 dsh）。 */
+  aiBackend: '' | 'dsh' | 'echocap';
 }
 
 export const DEFAULT_SETTINGS: PaperSettings = {
@@ -71,6 +73,8 @@ export const DEFAULT_SETTINGS: PaperSettings = {
     '需要引用参考论文时用 \\cite{key}（key 格式为 ref1、ref2…，对应参考论文序号），列表用 itemize/enumerate，强调用 \\textbf{}。' +
     '只输出小节正文源码（不要 \\section{}、\\begin{document} 等外壳），第一行不要重复小节标题。',
   semanticScholarApiKey: '',
+  // 留空 = 自动：检测到 EchoCap 环境（ECHO_CAP_SOCKET/鉴权 key）则用 echocap，否则用本机 dsh。
+  aiBackend: '',
 };
 
 export type IpcChannel =
@@ -158,7 +162,10 @@ export interface IpcContract {
   'papers:list': { req: void; res: PaperRecord[] };
   'papers:save': { req: { hit: PaperHit }; res: PaperRecord };
   'papers:delete': { req: { id: string }; res: void };
-  'papers:downloadPdf': { req: { id: string }; res: { ok: boolean; path?: string; message?: string } };
+  'papers:downloadPdf': {
+    req: { id: string };
+    res: { ok: boolean; status?: 'started' | 'running' | 'done'; path?: string; message?: string };
+  };
   'papers:importLocalPdf': { req: { path: string }; res: { ok: boolean; paper?: PaperRecord; message?: string } };
   'paper:exportBundle': { req: { id: string }; res: { ok: boolean; path?: string; message?: string } };
   'paper:importBundle': { req: { path: string }; res: { ok: boolean; paper?: PaperRecord; message?: string } };
@@ -171,7 +178,7 @@ export interface IpcContract {
     req: { paperId: string; kind: SummaryKind; text: string; images?: Array<{ page: number; dataUrl: string }> };
     res: { id: string };
   };
-  'markdown:open': { req: { path: string }; res: { ok: boolean; message?: string } };
+  'markdown:open': { req: { path: string }; res: { ok: boolean; message?: string; url?: string } };
   // ── 行内批注 ──
   'notes:list': { req: { paperId: string }; res: NoteRecord[] };
   'notes:add': {
@@ -287,6 +294,17 @@ export type SummaryEvent =
   | { id: string; kind: 'delta'; text: string }
   | { id: string; kind: 'done' }
   | { id: string; kind: 'error'; message: string };
+
+/**
+ * papers:event 推送负载（渲染层 window.paper.onPapersEvent 订阅）。
+ *
+ * PDF 下载改为后台任务：源站（arXiv 等）单连接限速严重，整篇可能要数分钟，
+ * 若让 RPC 同步等待，网关会先超时并回 "Bad Gateway"。
+ */
+export type PapersEvent =
+  | { type: 'progress'; id: string; loaded: number; total: number | null }
+  | { type: 'done'; id: string; path: string; elapsedMs?: number }
+  | { type: 'error'; id: string; message: string };
 
 // ── 行内批注 ────────────────────────────────────────────────
 

@@ -13,39 +13,69 @@ import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
 import Chip from '@mui/material/Chip';
 import Alert from '@mui/material/Alert';
-import { useLibraryStore } from '../store/libraryStore';
+import Link from '@mui/material/Link';
+import LinearProgress from '@mui/material/LinearProgress';
+import { pdfProgressLabel, useLibraryStore } from '../store/libraryStore';
+import { downloadUrlOf, fileNameOf } from '../fileLink';
 
 export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void }) {
-  const { papers, loadPapers, removePaper, downloadPdf } = useLibraryStore();
+  const { papers, loadPapers, removePaper, downloadPdf, pdfJobs } = useLibraryStore();
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [exportingId, setExportingId] = useState<string | null>(null);
-  const [msg, setMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ kind: 'success' | 'error'; text: string; file?: string | null } | null>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const bundleInputRef = useRef<HTMLInputElement>(null);
+  // 提示条里的产物名做成可点击下载（绝对路径只在服务端使用，不下发到界面）
+  const msgFileUrl = msg?.file ? downloadUrlOf(msg.file) : null;
 
   useEffect(() => {
     void loadPapers();
   }, [loadPapers]);
 
-  const showMsg = (kind: 'success' | 'error', text: string) => setMsg({ kind, text });
+  const showMsg = (kind: 'success' | 'error', text: string, file: string | null = null) => setMsg({ kind, text, file });
+
+  // PDF 下载已改为后台任务：源站限速下整篇要数分钟，同步等待会被网关判成超时
+  // 并回 "Bad Gateway"。这里只负责发起，结果由 papers:event 回调。
+  useEffect(() => {
+    if (!downloadingId) return;
+    const job = pdfJobs[downloadingId];
+    if (!job) return;
+    if (job.status === 'done') {
+      showMsg('success', 'PDF 已下载到：', job.path ?? null);
+      setDownloadingId(null);
+    } else if (job.status === 'error') {
+      showMsg('error', job.message ?? 'PDF 下载失败');
+      setDownloadingId(null);
+    }
+  }, [pdfJobs, downloadingId]);
 
   const handleDownload = async (id: string) => {
     setDownloadingId(id);
     setMsg(null);
     try {
       const res = await downloadPdf(id);
-      if (res.ok) {
-        showMsg('success', `PDF 已下载到：${res.path ?? '存储目录'}`);
-      } else {
+      if (!res.ok) {
         showMsg('error', res.message ?? 'PDF 下载失败');
+        setDownloadingId(null);
+        return;
+      }
+      if (res.status === 'done') {
+        showMsg('success', 'PDF 已下载到：', res.path ?? null);
+        setDownloadingId(null);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       showMsg('error', message.replace(/^Error invoking remote method '[^']+': /, ''));
-    } finally {
       setDownloadingId(null);
     }
   };
+
+  // 下载进度（总长度已知时显示确定进度，否则不确定进度）。
+  const activeJob = downloadingId ? pdfJobs[downloadingId] : undefined;
+  const activePct =
+    activeJob?.total && activeJob.total > 0
+      ? Math.min(100, Math.round((activeJob.loaded / activeJob.total) * 100))
+      : undefined;
 
   const handleExportBundle = async (id: string) => {
     setExportingId(id);
@@ -56,7 +86,11 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
         path?: string;
         message?: string;
       };
-      showMsg(res.ok ? 'success' : 'error', res.ok ? `论文包已导出：${res.path}` : `导出失败：${res.message ?? ''}`);
+      showMsg(
+          res.ok ? 'success' : 'error',
+          res.ok ? '论文包已导出：' : `导出失败：${res.message ?? ''}`,
+          res.ok ? res.path ?? null : null,
+        );
     } catch (err) {
       showMsg('error', err instanceof Error ? err.message : String(err));
     } finally {
@@ -67,9 +101,9 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
   const handleImportLocalPdf = async (file: File) => {
     setMsg(null);
     try {
-      const path = window.paper.getPathForFile(file);
+      const path = await window.paper.uploadFile(file);
       if (!path) {
-        showMsg('error', '无法获取文件路径');
+        showMsg('error', '文件上传失败');
         return;
       }
       const res = (await window.paper.invoke('papers:importLocalPdf', { path })) as {
@@ -87,9 +121,9 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
   const handleImportBundle = async (file: File) => {
     setMsg(null);
     try {
-      const path = window.paper.getPathForFile(file);
+      const path = await window.paper.uploadFile(file);
       if (!path) {
-        showMsg('error', '无法获取文件路径');
+        showMsg('error', '文件上传失败');
         return;
       }
       const res = (await window.paper.invoke('paper:importBundle', { path })) as {
@@ -152,6 +186,21 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
           {msg && (
             <Alert severity={msg.kind} sx={{ mb: 2 }}>
               {msg.text}
+              {msg.file && msgFileUrl && (
+                <Link href={msgFileUrl} download={fileNameOf(msg.file)} underline="hover" sx={{ wordBreak: 'break-all' }}>
+                  {fileNameOf(msg.file)}
+                </Link>
+              )}
+            </Alert>
+          )}
+          {downloadingId && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {`正在下载 PDF：${pdfProgressLabel(pdfJobs[downloadingId])}（源站限速时可能需要数分钟，可继续使用其他功能）`}
+              <LinearProgress
+                variant={activePct === undefined ? 'indeterminate' : 'determinate'}
+                value={activePct ?? 0}
+                sx={{ mt: 1 }}
+              />
             </Alert>
           )}
           <TableContainer component={Paper}>
@@ -202,7 +251,7 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
                           disabled={downloadingId !== null}
                           onClick={() => void handleDownload(p.id)}
                         >
-                          {downloadingId === p.id ? '下载中…' : '下载 PDF'}
+                          {downloadingId === p.id ? pdfProgressLabel(pdfJobs[p.id]) : '下载 PDF'}
                         </Button>
                       )}
                       <Button size="small" color="error" variant="outlined" onClick={() => void removePaper(p.id)}>

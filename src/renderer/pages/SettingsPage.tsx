@@ -1,4 +1,6 @@
-// 设置页：读/写 settings（IPC）。LLM 端点/key 不读 EchoAgent/.env，由用户填写。
+// 设置页：读/写 settings（IPC）。
+// AI 后端可选 dsh（本机引擎，需填 LLM 端点/key/模型名）或 echocap（Echo 平台网关，
+// 无需任何 LLM 凭证；也可留空自动探测）。选择 echocap 时隐藏 LLM 配置项。
 import React, { useEffect, useState } from 'react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -7,6 +9,10 @@ import Typography from '@mui/material/Typography';
 import Stack from '@mui/material/Stack';
 import Alert from '@mui/material/Alert';
 import Divider from '@mui/material/Divider';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
 import type { PaperSettings } from '../../shared/types';
 import { DEFAULT_SETTINGS } from '../../shared/types';
 
@@ -35,6 +41,9 @@ export function SettingsPage() {
     setSaved(false);
   };
 
+  // 选择 echocap 时 LLM 配置项无意义（模型与鉴权由平台提供），隐藏避免误导。
+  const showLlmFields = s.aiBackend !== 'echocap';
+
   const save = async () => {
     await window.paper.invoke('settings:save', s);
     setSaved(true);
@@ -47,30 +56,56 @@ export function SettingsPage() {
       </Typography>
       {saved && <Alert severity="success" sx={{ mb: 2 }}>已保存</Alert>}
       <Stack spacing={2}>
-        <TextField label="用户名" value={s.username} onChange={set('username')} />
-        <TextField label="LLM 端点 (OpenAI 兼容 baseURL)" value={s.llmBaseUrl} onChange={set('llmBaseUrl')} />
-        <TextField label="LLM API Key" type="password" value={s.llmApiKey} onChange={set('llmApiKey')} />
-        <TextField label="模型名" value={s.llmModel} onChange={set('llmModel')} />
-        <TextField
-          label="上下文窗口"
-          type="number"
-          value={s.llmContextWindow}
-          onChange={(e) => setS({ ...s, llmContextWindow: Number(e.target.value) })}
-        />
-        <TextField
-          label="输入截断上限（字符）"
-          type="number"
-          value={s.llmMaxInputChars}
-          onChange={(e) => setS({ ...s, llmMaxInputChars: Number(e.target.value) })}
-          helperText="总结/写作等任务送入 LLM 的原文最大字符数（全文提取也按此截断）"
-        />
-        <TextField
-          label="输出 token 上限"
-          type="number"
-          value={s.llmMaxOutputTokens}
-          onChange={(e) => setS({ ...s, llmMaxOutputTokens: Number(e.target.value) })}
-          helperText="不传时多数服务默认 4096，长总结会被截断；DeepSeek 一般最大 8192"
-        />
+        <FormControl fullWidth>
+          <InputLabel>AI 后端</InputLabel>
+          <Select
+            label="AI 后端"
+            value={s.aiBackend}
+            onChange={(e) => {
+              setS({ ...s, aiBackend: e.target.value as PaperSettings['aiBackend'] });
+              setSaved(false);
+            }}
+          >
+            <MenuItem value="">
+              自动（推荐：检测到 EchoCap 环境则用 echocap，否则用本机 dsh）
+            </MenuItem>
+            <MenuItem value="dsh">dsh（本机 deepseek-harness 引擎，需配置下方 LLM 凭证）</MenuItem>
+            <MenuItem value="echocap">echocap（Echo 平台能力网关，无需 LLM 凭证）</MenuItem>
+          </Select>
+        </FormControl>
+
+        {showLlmFields ? (
+          <>
+            <TextField label="用户名" value={s.username} onChange={set('username')} />
+            <TextField label="LLM 端点 (OpenAI 兼容 baseURL)" value={s.llmBaseUrl} onChange={set('llmBaseUrl')} />
+            <TextField label="LLM API Key" type="password" value={s.llmApiKey} onChange={set('llmApiKey')} />
+            <TextField label="模型名" value={s.llmModel} onChange={set('llmModel')} />
+            <TextField
+              label="上下文窗口"
+              type="number"
+              value={s.llmContextWindow}
+              onChange={(e) => setS({ ...s, llmContextWindow: Number(e.target.value) })}
+            />
+            <TextField
+              label="输入截断上限（字符）"
+              type="number"
+              value={s.llmMaxInputChars}
+              onChange={(e) => setS({ ...s, llmMaxInputChars: Number(e.target.value) })}
+              helperText="总结/写作等任务送入 LLM 的原文最大字符数（全文提取也按此截断）"
+            />
+            <TextField
+              label="输出 token 上限"
+              type="number"
+              value={s.llmMaxOutputTokens}
+              onChange={(e) => setS({ ...s, llmMaxOutputTokens: Number(e.target.value) })}
+              helperText="不传时多数服务默认 4096，长总结会被截断；DeepSeek 一般最大 8192"
+            />
+          </>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            已选择 echocap 后端：模型与子代理调用由平台能力网关提供，无需配置 LLM 端点、API Key 与模型名。
+          </Typography>
+        )}
         <TextField
           label="存储目录（留空=PaperStudio/storage/papers，数据不落 C 盘）"
           value={s.storageDir}

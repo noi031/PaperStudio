@@ -21,11 +21,13 @@ import Alert from '@mui/material/Alert';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SlideshowIcon from '@mui/icons-material/Slideshow';
+import Link from '@mui/material/Link';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useLibraryStore } from '../store/libraryStore';
 import { usePresentationStore } from '../store/presentationStore';
 import { PromptEditor } from '../components/PromptEditor';
 import { latexToText } from '../../shared/latex';
+import { downloadUrlOf, fileNameOf } from '../fileLink';
 import type { PresentationRecord } from '../../shared/types';
 
 export function PresentPage() {
@@ -176,9 +178,15 @@ export function PresentPage() {
                 </Typography>
               )}
               {current.pptxPath && (
-                <Typography variant="caption" color="success.main" sx={{ display: 'block', mb: 1 }}>
-                  已导出：{current.pptxPath}
-                </Typography>
+                <Link
+                  href={downloadUrlOf(current.pptxPath) ?? '#'}
+                  download={fileNameOf(current.pptxPath)}
+                  underline="hover"
+                  sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 1, fontSize: 13 }}
+                >
+                  <FileDownloadIcon sx={{ fontSize: 15 }} />
+                  下载 PPTX：{fileNameOf(current.pptxPath)}
+                </Link>
               )}
               {current.slides.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
