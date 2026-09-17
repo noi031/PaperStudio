@@ -68,6 +68,9 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
   console.log(`[paperstudio] AI 后端：${backendLabel(backend)}`);
 
   const host = createAgentHost({
+    // userDataDir 仅 dsh 后端使用（写 dsh-mcp.patch.yml + DSH_HOME 默认目录），
+    // 指到数据目录避免把运行时产物落到项目根。
+    userDataDir: storageRoot,
     settings: () => db.getSettings(),
     onLog: (line) => appendLog(`[host] ${line}\n`),
   });
