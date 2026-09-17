@@ -74,9 +74,11 @@ export function SettingsPage() {
           </Select>
         </FormControl>
 
+        {/** 批注作者名：dsh 与 echocap 两种后端都需要，始终显示。 */}
+        <TextField label="用户名（批注作者名）" value={s.username} onChange={set('username')} />
+
         {showLlmFields ? (
           <>
-            <TextField label="用户名" value={s.username} onChange={set('username')} />
             <TextField label="LLM 端点 (OpenAI 兼容 baseURL)" value={s.llmBaseUrl} onChange={set('llmBaseUrl')} />
             <TextField label="LLM API Key" type="password" value={s.llmApiKey} onChange={set('llmApiKey')} />
             <TextField label="模型名" value={s.llmModel} onChange={set('llmModel')} />
