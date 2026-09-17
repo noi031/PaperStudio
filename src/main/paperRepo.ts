@@ -1,6 +1,6 @@
 // P3 文献库仓储：papers 表 CRUD（better-sqlite3，同步）。
 import { randomUUID } from 'node:crypto';
-import type { Database } from 'better-sqlite3';
+import type { SqliteDb } from './sqlite.js';
 import type { PaperHit, PaperRecord } from '../shared/types.js';
 
 interface PaperRow {
@@ -36,7 +36,7 @@ function toRecord(r: PaperRow): PaperRecord {
 }
 
 export class PaperRepo {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: SqliteDb) {}
 
   list(): PaperRecord[] {
     const rows = this.db.prepare('SELECT * FROM papers ORDER BY added_at DESC').all() as PaperRow[];

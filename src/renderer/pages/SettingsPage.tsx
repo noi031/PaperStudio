@@ -46,31 +46,10 @@ export function SettingsPage() {
         设置
       </Typography>
       {saved && <Alert severity="success" sx={{ mb: 2 }}>已保存</Alert>}
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        模型与子代理调用由平台 EchoCap 提供，应用内不再需要配置 LLM 端点、API Key 与模型名；用户名由工作台自行处理，无需填写。
+      </Typography>
       <Stack spacing={2}>
-        <TextField label="用户名" value={s.username} onChange={set('username')} />
-        <TextField label="LLM 端点 (OpenAI 兼容 baseURL)" value={s.llmBaseUrl} onChange={set('llmBaseUrl')} />
-        <TextField label="LLM API Key" type="password" value={s.llmApiKey} onChange={set('llmApiKey')} />
-        <TextField label="模型名" value={s.llmModel} onChange={set('llmModel')} />
-        <TextField
-          label="上下文窗口"
-          type="number"
-          value={s.llmContextWindow}
-          onChange={(e) => setS({ ...s, llmContextWindow: Number(e.target.value) })}
-        />
-        <TextField
-          label="输入截断上限（字符）"
-          type="number"
-          value={s.llmMaxInputChars}
-          onChange={(e) => setS({ ...s, llmMaxInputChars: Number(e.target.value) })}
-          helperText="总结/写作等任务送入 LLM 的原文最大字符数（全文提取也按此截断）"
-        />
-        <TextField
-          label="输出 token 上限"
-          type="number"
-          value={s.llmMaxOutputTokens}
-          onChange={(e) => setS({ ...s, llmMaxOutputTokens: Number(e.target.value) })}
-          helperText="不传时多数服务默认 4096，长总结会被截断；DeepSeek 一般最大 8192"
-        />
         <TextField
           label="存储目录（留空=PaperStudio/storage/papers，数据不落 C 盘）"
           value={s.storageDir}
@@ -84,10 +63,11 @@ export function SettingsPage() {
           helperText="检索页无 key 时 Semantic Scholar 限流很严（常报 429）；填 key（https://www.semanticscholar.org/product/api#api-key-form）可大幅提高额度"
         />
         <TextField
-          label="EchoMem 端点（可选）"
-          value={s.echoMemEndpoint}
-          onChange={set('echoMemEndpoint')}
-          helperText="EchoMem 记忆接入在 P8 生效"
+          label="输入截断上限（字符）"
+          type="number"
+          value={s.llmMaxInputChars}
+          onChange={(e) => setS({ ...s, llmMaxInputChars: Number(e.target.value) })}
+          helperText="总结/全文提取时送入模型的原文最大字符数"
         />
       </Stack>
 

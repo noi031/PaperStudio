@@ -4,18 +4,22 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import OpenAI from 'openai';
-import type { BrowserWindow } from 'electron';
+import { chatTextStream } from './llm.js';
+import { echoCapStatus } from './echoCap.js';
 import type { PaperSettings, SummaryEvent, SummaryKind } from '../shared/types.js';
+import type { HostEmit } from './ipc.js';
 
 /** 全文总结输入截断上限（防超上下文）；可在设置页调整。 */
 export const MAX_INPUT_CHARS = 120000;
 /** 输出 token 上限；可在设置页调整。 */
 export const MAX_OUTPUT_TOKENS = 8000;
+/** 总结入库时记录的模型标识（平台侧模型档位）。 */
+export const MODEL_LABEL = 'echocap:primary';
 
 export interface SummaryServiceOptions {
   getSettings: () => PaperSettings;
-  getWindow: () => BrowserWindow | null;
+  /** 事件发射器（Electron: webContents.send；Web: SSE 广播）。 */
+  emit: HostEmit;
   /** 写入 Markdown 文件的工作目录（storage/markdown）。 */
   markdownDir: string;
   insertSummary: (
@@ -87,18 +91,18 @@ export class SummaryService {
   constructor(private readonly opts: SummaryServiceOptions) {}
 
   private emit(payload: SummaryEvent): void {
-    this.opts.getWindow()?.webContents.send('summary:event', payload);
+    this.opts.emit('summary:event', payload);
   }
 
   /** 启动一次流式总结；立即返回 job id，chunk 走 summary:event。figList 为论文图表清单（可选）。 */
   run(paperId: string, kind: SummaryKind, text: string, paperTitle: string, figList = ''): { id: string } {
     const id = randomUUID();
-    const { llmBaseUrl, llmApiKey, llmModel } = this.opts.getSettings();
-    if (!llmApiKey) {
-      this.emit({ id, kind: 'error', message: '未配置 LLM API Key，请到设置页填写' });
+    const cap = echoCapStatus();
+    if (!cap.ok) {
+      this.emit({ id, kind: 'error', message: `EchoCap 不可用：${cap.message}` });
       return { id };
     }
-    void this.stream(paperId, kind, text, paperTitle, id, llmBaseUrl, llmApiKey, llmModel, figList);
+    void this.stream(paperId, kind, text, paperTitle, id, figList);
     return { id };
   }
 
@@ -107,36 +111,33 @@ export class SummaryService {
     return writeSummaryMd(this.opts.markdownDir, paperId, kind, content, paperTitle);
   }
 
+  /** 生成一份总结（经 EchoCap model.call）。平台不返回增量正文，故在完成后一次性 emit。 */
   private async stream(
     paperId: string,
     kind: SummaryKind,
     text: string,
     paperTitle: string,
     id: string,
-    baseUrl: string,
-    apiKey: string,
-    model: string,
     figList = '',
   ): Promise<void> {
     try {
-      const client = new OpenAI({ baseURL: baseUrl || undefined, apiKey });
       const settings = this.opts.getSettings();
       const systemPrompt = kind === 'selected' ? settings.promptSummarySelected : settings.promptSummaryFull;
-      const stream = await client.chat.completions.create({
-        model,
-        messages: buildSummaryMessages(paperTitle, kind, text, systemPrompt, settings.llmMaxInputChars, figList),
-        max_tokens: settings.llmMaxOutputTokens || MAX_OUTPUT_TOKENS,
-        stream: true,
-      });
+      const messages = buildSummaryMessages(
+        paperTitle,
+        kind,
+        text,
+        systemPrompt,
+        settings.llmMaxInputChars,
+        figList,
+      );
       let content = '';
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content;
-        if (!delta) continue;
+      await chatTextStream(settings, messages, (delta) => {
         content += delta;
         this.emit({ id, kind: 'delta', text: delta });
-      }
+      });
       const mdPath = this.writeMd(paperId, kind, content, paperTitle);
-      this.opts.insertSummary(paperId, kind, content, model, mdPath);
+      this.opts.insertSummary(paperId, kind, content, MODEL_LABEL, mdPath);
       this.emit({ id, kind: 'done' });
     } catch (err) {
       this.emit({ id, kind: 'error', message: err instanceof Error ? err.message : String(err) });

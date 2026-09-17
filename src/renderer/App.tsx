@@ -52,9 +52,13 @@ export function App() {
   const [page, setPage] = useState<PageKey>('search');
   const [readerPaperId, setReaderPaperId] = useState<string | null>(null);
   const handleSummaryEvent = useLibraryStore((s) => s.handleSummaryEvent);
+  const handlePapersEvent = useLibraryStore((s) => s.handlePapersEvent);
 
   // 订阅主进程 summary:event（选中/全文总结流式推送）。
   useEffect(() => window.paper.onSummaryEvent(handleSummaryEvent), [handleSummaryEvent]);
+
+  // 订阅 papers:event（PDF 后台下载的进度与结果）。
+  useEffect(() => window.paper.onPapersEvent(handlePapersEvent), [handlePapersEvent]);
 
   const renderPage = (): React.ReactNode => {
     switch (page) {

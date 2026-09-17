@@ -116,7 +116,7 @@ function makeService(
     repo,
     host: host as unknown as AgentHost,
     getSettings: () => ({}) as never,
-    getWindow: () => ({ webContents: { send: (_c: string, p: unknown) => emitted.push(p) } }) as never,
+    emit: (_type: string, p: unknown) => emitted.push(p),
   }) as AgentService & { __emitWindow: unknown[] };
   (service as unknown as { __emitWindow: unknown[] }).__emitWindow = emitted;
   return service;

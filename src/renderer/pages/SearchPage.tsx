@@ -17,7 +17,9 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
-import { useLibraryStore } from '../store/libraryStore';
+import Link from '@mui/material/Link';
+import { pdfProgressLabel, useLibraryStore } from '../store/libraryStore';
+import { downloadUrlOf, fileNameOf } from '../fileLink';
 import type { PaperHit, PaperRecord } from '../../shared/types';
 import { latexToText } from '../../shared/latex';
 
@@ -51,8 +53,12 @@ export function SearchPage() {
   const [agenticError, setAgenticError] = useState<string | null>(null);
   const [agenticWarnings, setAgenticWarnings] = useState<string[]>([]);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [downloadMsg, setDownloadMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
-  const { hits, searching, searchError, searchWarnings, papers, runSearch, loadPapers, saveHit, downloadPdf } =
+  const [downloadMsg, setDownloadMsg] = useState<{
+    kind: 'success' | 'error';
+    text: string;
+    file?: string | null;
+  } | null>(null);
+  const { hits, searching, searchError, searchWarnings, papers, runSearch, loadPapers, saveHit, downloadPdf, pdfJobs } =
     useLibraryStore();
 
   useEffect(() => {
@@ -148,6 +154,20 @@ export function SearchPage() {
     await saveHit(h);
   };
 
+  // PDF 下载是后台任务：进度与结果经 papers:event 推送（不再同步等待长请求）。
+  useEffect(() => {
+    if (!downloadingId) return;
+    const job = pdfJobs[downloadingId];
+    if (!job) return;
+    if (job.status === 'done') {
+      setDownloadMsg({ kind: 'success', text: 'PDF 已下载到：', file: job.path ?? null });
+      setDownloadingId(null);
+    } else if (job.status === 'error') {
+      setDownloadMsg({ kind: 'error', text: job.message ?? 'PDF 下载失败' });
+      setDownloadingId(null);
+    }
+  }, [pdfJobs, downloadingId]);
+
   const handleDownload = async (id: string) => {
     if (!id) {
       setDownloadMsg({ kind: 'error', text: '未找到已入库的论文记录，请先「保存」' });
@@ -157,18 +177,27 @@ export function SearchPage() {
     setDownloadMsg(null);
     try {
       const res = await downloadPdf(id);
-      if (res.ok) {
-        setDownloadMsg({ kind: 'success', text: `PDF 已下载到：${res.path ?? '存储目录'}` });
-      } else {
+      if (!res.ok) {
         setDownloadMsg({ kind: 'error', text: res.message ?? 'PDF 下载失败' });
+        setDownloadingId(null);
+        return;
+      }
+      if (res.status === 'done') {
+        setDownloadMsg({ kind: 'success', text: 'PDF 已下载到：', file: res.path ?? null });
+        setDownloadingId(null);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setDownloadMsg({ kind: 'error', text: message.replace(/^Error invoking remote method '[^']+': /, '') });
-    } finally {
       setDownloadingId(null);
     }
   };
+
+  const activeJob = downloadingId ? pdfJobs[downloadingId] : undefined;
+  const activePct =
+    activeJob?.total && activeJob.total > 0
+      ? Math.min(100, Math.round((activeJob.loaded / activeJob.total) * 100))
+      : undefined;
 
   return (
     <Box sx={{ p: 2 }}>
@@ -272,9 +301,30 @@ export function SearchPage() {
         </>
       )}
 
+      {downloadingId && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {`正在下载 PDF：${pdfProgressLabel(pdfJobs[downloadingId])}（源站限速时可能需要数分钟，可继续检索或总结）`}
+          <LinearProgress
+            variant={activePct === undefined ? 'indeterminate' : 'determinate'}
+            value={activePct ?? 0}
+            sx={{ mt: 1 }}
+          />
+        </Alert>
+      )}
+
       {downloadMsg && (
         <Alert severity={downloadMsg.kind} sx={{ mb: 2 }}>
           {downloadMsg.text}
+          {downloadMsg.file && downloadUrlOf(downloadMsg.file) && (
+            <Link
+              href={String(downloadUrlOf(downloadMsg.file))}
+              download={fileNameOf(downloadMsg.file)}
+              underline="hover"
+              sx={{ wordBreak: 'break-all' }}
+            >
+              {fileNameOf(downloadMsg.file)}
+            </Link>
+          )}
         </Alert>
       )}
 
@@ -325,7 +375,7 @@ export function SearchPage() {
                           disabled={downloadingId !== null}
                           onClick={() => void handleDownload(getSavedId(h, papers) ?? '')}
                         >
-                          {downloadingId === getSavedId(h, papers) ? '下载中…' : '下载 PDF'}
+                          {downloadingId === getSavedId(h, papers) ? pdfProgressLabel(pdfJobs[getSavedId(h, papers) ?? '']) : '下载 PDF'}
                         </Button>
                       )}
                     </Stack>
@@ -400,7 +450,7 @@ export function SearchPage() {
                             disabled={downloadingId !== null}
                             onClick={() => void handleDownload(getSavedId(h, papers) ?? '')}
                           >
-                            {downloadingId === getSavedId(h, papers) ? '下载中…' : '下载 PDF'}
+                            {downloadingId === getSavedId(h, papers) ? pdfProgressLabel(pdfJobs[getSavedId(h, papers) ?? '']) : '下载 PDF'}
                           </Button>
                         )}
                       </Stack>

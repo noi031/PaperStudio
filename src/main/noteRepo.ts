@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Database } from 'better-sqlite3';
+import type { SqliteDb } from './sqlite.js';
 import type { NoteRecord, NoteType } from '../shared/types.js';
 
 interface NoteRow {
@@ -32,7 +32,7 @@ function toRecord(r: NoteRow): NoteRecord {
 }
 
 export class NoteRepo {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: SqliteDb) {}
 
   listByPaper(paperId: string): NoteRecord[] {
     const rows = this.db

@@ -27,6 +27,8 @@ import { useLibraryStore } from '../store/libraryStore';
 import { useWritingStore } from '../store/writingStore';
 import { PromptEditor } from '../components/PromptEditor';
 import { latexToText } from '../../shared/latex';
+import Link from '@mui/material/Link';
+import { downloadUrlOf, fileNameOf } from '../fileLink';
 import type { DraftRecord } from '../../shared/types';
 
 export function WritingPage() {
@@ -293,10 +295,16 @@ export function WritingPage() {
                 </Typography>
               )}
               {current.exportedPath && (
-                <Typography variant="caption" color="success.main" sx={{ display: 'block', mb: 1 }}>
-                  已导出：{current.exportedPath}
-                </Typography>
-              )}
+                  <Link
+                    href={downloadUrlOf(current.exportedPath) ?? '#'}
+                    download={fileNameOf(current.exportedPath)}
+                    underline="hover"
+                    sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 1, fontSize: 13 }}
+                  >
+                    <FileDownloadIcon sx={{ fontSize: 15 }} />
+                    下载导出文件：{fileNameOf(current.exportedPath)}
+                  </Link>
+                )}
               {current.outline.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   尚未生成大纲。点击「生成大纲」后，逐节用 AI 撰写或手动编辑。

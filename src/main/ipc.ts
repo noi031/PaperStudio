@@ -1,8 +1,6 @@
 // 主进程 IPC 注册：所有通道集中在此，按阶段扩展。
 import fs from 'node:fs';
 import path from 'node:path';
-import type { IpcMain } from 'electron';
-import { BrowserWindow } from 'electron';
 import type { Db } from './db';
 import type { PaperSettings } from '../shared/types.js';
 import type { AgentService } from './agentService';
@@ -25,7 +23,17 @@ import { generateSlides, exportPptx } from './presentationService.js';
 import { writeSummaryMd } from './summaryService.js';
 import { PDFDocument } from 'pdf-lib';
 
+/** 事件发射器：Electron 下为 webContents.send，Web 版为 SSE 广播。 */
+export type HostEmit = (type: string, payload: unknown) => void;
+
+/** 通道注册器：Electron 下由 ipcMain 实现，Web 版由 HTTP RPC 适配器实现。 */
+export interface HandlerRegistrar {
+  handle(channel: string, fn: (req: any) => unknown): void;
+}
+
 export interface IpcDeps {
+  /** 向渲染层广播事件（agent:event / summary:event / search:event）。 */
+  emit: HostEmit;
   db: Db;
   agent: AgentService;
   papers: PaperRepo;
@@ -59,17 +67,19 @@ function toMessageLite(m: {
   return { id: m.id, role: m.role, kind: m.kind, content: m.content, createdAt: m.createdAt };
 }
 
-export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
+export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
+  // 正在后台下载 PDF 的论文（同一个 id 只跑一个任务）。
+  const pdfJobs = new Map<string, Promise<void>>();
   const { db, agent, papers, pdf, summaries, summary, directions, drafts, presentations, notes, getSettings, storageDir, exportDir, markdownDir } = deps;
 
-  ipcMain.handle('settings:get', () => db.getSettings());
-  ipcMain.handle('settings:save', (_e, patch: Partial<PaperSettings>) => db.saveSettings(patch));
-  ipcMain.handle('db:ping', () => db.ping());
+  ipc.handle('settings:get', () => db.getSettings());
+  ipc.handle('settings:save', (patch: Partial<PaperSettings>) => db.saveSettings(patch));
+  ipc.handle('db:ping', () => db.ping());
 
   // ── agent ─────────────────────────────────────────────────
-  // health 幂等自动启动：打开 AI 助手页即拉起 dsh 引擎（配置了 API Key 时），
-  // 徽章显示版本而非「未启动」；启动失败（如无 key）返回错误消息给 UI 展示。
-  ipcMain.handle('agent:health', async () => {
+    // health 幂等自动启动：打开 AI 助手页即建立 EchoCap 代理宿主连接，
+    // 徽章显示引擎版本而非「未启动」；启动失败（如 socket / 鉴权缺失）返回错误消息给 UI 展示。
+  ipc.handle('agent:health', async () => {
     try {
       await agent.ensureStarted();
     } catch (err) {
@@ -78,39 +88,38 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     return agent.health();
   });
 
-  ipcMain.handle('agent:listSessions', () => agent.listSessions().map(toSessionLite));
+  ipc.handle('agent:listSessions', () => agent.listSessions().map(toSessionLite));
 
-  ipcMain.handle('agent:createSession', (_e, req: { title?: string; context?: string }) => {
+  ipc.handle('agent:createSession', (req: { title?: string; context?: string }) => {
     const s = agent.createSession(req.title ?? '未命名会话', req.context ?? '');
     return toSessionLite(s);
   });
-  ipcMain.handle('agent:deleteSession', (_e, req: { id: string }) => {
+  ipc.handle('agent:deleteSession', (req: { id: string }) => {
     agent.deleteSession(req.id);
   });
 
-  ipcMain.handle('agent:listMessages', (_e, req: { id: string }) =>
+  ipc.handle('agent:listMessages', (req: { id: string }) =>
     agent.listMessages(req.id).map(toMessageLite),
   );
 
-  ipcMain.handle('agent:sendMessage', async (_e, req: { id: string; text: string }) => {
+  ipc.handle('agent:sendMessage', async (req: { id: string; text: string }) => {
     await agent.sendMessage(req.id, req.text);
     return { ok: true };
   });
 
-  ipcMain.handle('agent:stop', (_e, req: { id: string }) => {
+  ipc.handle('agent:stop', (req: { id: string }) => {
     void agent.stop(req.id);
   });
 
   // ── P3 读的闭环 ───────────────────────────────────────────
-  ipcMain.handle('search:run', async (_e, req: { query: string; limit?: number; offset?: number; cursor?: string }) =>
+  ipc.handle('search:run', async (req: { query: string; limit?: number; offset?: number; cursor?: string }) =>
     search(req.query, req.limit ?? 10, { s2ApiKey: getSettings().semanticScholarApiKey, oaCursor: req.cursor }, req.offset ?? 0),
   );
 
   // Agentic 检索：自然语言提问 → LLM 生成查询 → 多源检索合并 → LLM 评估相关度。
   // 阶段进度经 search:event 推送（plan / searching / scoring）。
-  ipcMain.handle('search:agentic', async (_e, req: { question: string }) => {
-    const win = BrowserWindow.getAllWindows()[0] ?? null;
-    const emit = (stage: 'plan' | 'searching' | 'scoring') => win?.webContents.send('search:event', { stage });
+  ipc.handle('search:agentic', async (req: { question: string }) => {
+    const emit = (stage: 'plan' | 'searching' | 'scoring') => deps.emit('search:event', { stage });
     try {
       const result = await agenticSearch(req.question, getSettings(), emit);
       return { ok: true, ...result };
@@ -119,28 +128,62 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('papers:list', () => papers.list());
+  ipc.handle('papers:list', () => papers.list());
 
-  ipcMain.handle('papers:save', (_e, req: { hit: PaperHit }) => papers.save(req.hit));
+  ipc.handle('papers:save', (req: { hit: PaperHit }) => papers.save(req.hit));
 
-  ipcMain.handle('papers:delete', (_e, req: { id: string }) => {
+  ipc.handle('papers:delete', (req: { id: string }) => {
     papers.remove(req.id);
   });
 
-  ipcMain.handle('papers:downloadPdf', async (_e, req: { id: string }) => {
+  // 下载 PDF：后台任务 + 事件推送。
+  // arXiv 等源站对单连接限速只有几 KB/s，整篇下载要数分钟；若同步等待返回，
+  // 网关会先判超时并回 "Bad Gateway" 纯文本，前端 JSON.parse 就会抛
+  // `Unexpected token 'B', "Bad Gateway " is not valid JSON`。
+  // 因此这里立即返回任务状态，进度与结果统一经 papers:event 推送。
+  ipc.handle('papers:downloadPdf', (req: { id: string }) => {
     const p = papers.get(req.id);
     if (!p) return { ok: false, message: '论文不存在' };
-    try {
-      const { pdfPath } = await pdf.ensureAndRead(p);
-      papers.setPdfPath(p.id, pdfPath);
-      return { ok: true, path: pdfPath };
-    } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : String(err) };
-    }
+    if (p.pdfPath && fs.existsSync(p.pdfPath)) return { ok: true, status: 'done', path: p.pdfPath };
+    if (!p.pdfUrl) return { ok: false, message: '该论文无可用 PDF 链接' };
+    if (pdfJobs.has(p.id)) return { ok: true, status: 'running' };
+
+    const startedAt = Date.now();
+    let lastEmit = 0;
+    const job = (async () => {
+      try {
+        const pdfPath = await pdf.ensureDownloaded(p, {
+          onProgress: ({ loaded, total }) => {
+            const now = Date.now();
+            // 按 1s 节流（下载结束那一帧必发），避免高频事件刷屏。
+            const finished = total !== null && loaded >= total;
+            if (!finished && now - lastEmit < 1000) return;
+            lastEmit = now;
+            deps.emit('papers:event', { type: 'progress', id: p.id, loaded, total });
+          },
+        });
+        papers.setPdfPath(p.id, pdfPath);
+        deps.emit('papers:event', {
+          type: 'done',
+          id: p.id,
+          path: pdfPath,
+          elapsedMs: Date.now() - startedAt,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.warn(`[papers] PDF 下载失败 ${p.id}: ${message}`);
+        deps.emit('papers:event', { type: 'error', id: p.id, message });
+      } finally {
+        pdfJobs.delete(p.id);
+      }
+    })();
+    pdfJobs.set(p.id, job);
+    return { ok: true, status: 'started' };
   });
 
   // ── 本地 PDF 导入 ─────────────────────────────────────────
-  ipcMain.handle('papers:importLocalPdf', async (_e, req: { path: string }) => {
+  ipc.handle('papers:importLocalPdf', async (req: { path: string }) => {
     try {
       const src = path.resolve(req.path);
       if (!fs.existsSync(src)) return { ok: false, message: '文件不存在' };
@@ -180,7 +223,7 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   });
 
   // ── 论文一体化数据包（PDF + 批注 + 总结）导出/导入 ─────────
-  ipcMain.handle('paper:exportBundle', async (_e, req: { id: string }) => {
+  ipc.handle('paper:exportBundle', async (req: { id: string }) => {
     try {
       const p = papers.get(req.id);
       if (!p) return { ok: false, message: '论文不存在' };
@@ -230,7 +273,7 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('paper:importBundle', async (_e, req: { path: string }) => {
+  ipc.handle('paper:importBundle', async (req: { path: string }) => {
     try {
       const src = path.resolve(req.path);
       if (!fs.existsSync(src)) return { ok: false, message: '文件不存在' };
@@ -319,7 +362,7 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('reader:open', async (_e, req: { id: string }) => {
+  ipc.handle('reader:open', async (req: { id: string }) => {
     const p = papers.get(req.id);
     if (!p) return { error: '论文不存在' };
     try {
@@ -331,11 +374,11 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('summaries:list', (_e, req: { paperId: string }) => summaries.listByPaper(req.paperId));
+  ipc.handle('summaries:list', (req: { paperId: string }) => summaries.listByPaper(req.paperId));
 
-  ipcMain.handle(
+  ipc.handle(
     'summary:run',
-    (_e, req: { paperId: string; kind: SummaryKind; text: string; images?: Array<{ page: number; dataUrl: string }> }) => {
+    (req: { paperId: string; kind: SummaryKind; text: string; images?: Array<{ page: number; dataUrl: string }> }) => {
       const p = papers.get(req.paperId);
       let figList = '';
       try {
@@ -361,25 +404,25 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   );
 
   // ── 行内批注 ──────────────────────────────────────────────
-  ipcMain.handle('notes:list', (_e, req: { paperId: string }) => notes.listByPaper(req.paperId));
+  ipc.handle('notes:list', (req: { paperId: string }) => notes.listByPaper(req.paperId));
 
-  ipcMain.handle(
+  ipc.handle(
     'notes:add',
-    (_e, req: { paperId: string; page: number; type: NoteType; text: string; content: string; color?: string | null }) =>
+    (req: { paperId: string; page: number; type: NoteType; text: string; content: string; color?: string | null }) =>
       notes.insert(req.paperId, req.page, req.type, req.text, req.content, db.getSettings().username || 'me', req.color ?? null),
   );
 
-  ipcMain.handle(
+  ipc.handle(
     'notes:update',
-    (_e, req: { id: string; content?: string; type?: NoteType; text?: string; color?: string | null }) =>
+    (req: { id: string; content?: string; type?: NoteType; text?: string; color?: string | null }) =>
       notes.update(req.id, req),
   );
 
-  ipcMain.handle('notes:delete', (_e, req: { id: string }) => {
+  ipc.handle('notes:delete', (req: { id: string }) => {
     notes.remove(req.id);
   });
 
-  ipcMain.handle('notes:export', (_e, req: { paperId: string }) => {
+  ipc.handle('notes:export', (req: { paperId: string }) => {
     const p = papers.get(req.paperId);
     if (!p) return { ok: false, message: '论文不存在' };
     if (notes.countByPaper(req.paperId) === 0) return { ok: false, message: '该论文还没有批注' };
@@ -391,7 +434,7 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('notes:import', (_e, req: { paperId: string; json: string }) => {
+  ipc.handle('notes:import', (req: { paperId: string; json: string }) => {
     const p = papers.get(req.paperId);
     if (!p) return { ok: false, message: '论文不存在，请先保存论文再导入' };
     try {
@@ -404,9 +447,9 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   });
 
   // ── P5 方向建议 ───────────────────────────────────────────
-  ipcMain.handle('directions:list', () => directions.list());
+  ipc.handle('directions:list', () => directions.list());
 
-  ipcMain.handle('directions:generate', async (_e, req: { paperIds: string[] }) => {
+  ipc.handle('directions:generate', async (req: { paperIds: string[] }) => {
     const selected = req.paperIds.length
       ? req.paperIds.map((id) => papers.get(id)).filter((p): p is NonNullable<typeof p> => p !== null)
       : papers.list();
@@ -420,18 +463,18 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('directions:delete', (_e, req: { id: string }) => {
+  ipc.handle('directions:delete', (req: { id: string }) => {
     directions.remove(req.id);
   });
 
   // ── P6 写作 ───────────────────────────────────────────────
-  ipcMain.handle('drafts:list', () => drafts.list());
+  ipc.handle('drafts:list', () => drafts.list());
 
-  ipcMain.handle('drafts:create', (_e, req: { paperId: string | null; title: string; referenceIds?: string[] }) =>
+  ipc.handle('drafts:create', (req: { paperId: string | null; title: string; referenceIds?: string[] }) =>
     drafts.insert(req.paperId, req.title, req.referenceIds ?? []),
   );
 
-  ipcMain.handle('drafts:delete', (_e, req: { id: string }) => {
+  ipc.handle('drafts:delete', (req: { id: string }) => {
     drafts.remove(req.id);
   });
 
@@ -456,7 +499,7 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     };
   }
 
-  ipcMain.handle('drafts:generateOutline', async (_e, req: { id: string }) => {
+  ipc.handle('drafts:generateOutline', async (req: { id: string }) => {
     const d = drafts.get(req.id);
     if (!d) return { ok: false, message: '草稿不存在' };
     const { paper, references } = draftContext(d);
@@ -471,7 +514,7 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('drafts:writeSection', async (_e, req: { id: string; index: number }) => {
+  ipc.handle('drafts:writeSection', async (req: { id: string; index: number }) => {
     const d = drafts.get(req.id);
     if (!d) return { ok: false, message: '草稿不存在' };
     if (d.outline.length === 0) return { ok: false, message: '请先生成大纲' };
@@ -489,14 +532,14 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('drafts:setSection', (_e, req: { id: string; index: number; content: string }) => {
+  ipc.handle('drafts:setSection', (req: { id: string; index: number; content: string }) => {
     const d = drafts.get(req.id);
     if (!d) throw new Error('草稿不存在');
     const sections = d.sections.map((s, i) => (i === req.index ? { ...s, content: req.content } : s));
     return drafts.update(d.id, { sections });
   });
 
-  ipcMain.handle('drafts:export', async (_e, req: { id: string; format?: 'docx' | 'md' | 'tex' | 'bib' }) => {
+  ipc.handle('drafts:export', async (req: { id: string; format?: 'docx' | 'md' | 'tex' | 'bib' }) => {
     const d = drafts.get(req.id);
     if (!d) return { ok: false, message: '草稿不存在' };
     const empty = d.sections.filter((s) => !s.content.trim()).length;
@@ -516,13 +559,13 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
   });
 
   // ── P7 演示 ───────────────────────────────────────────────
-  ipcMain.handle('presentations:list', () => presentations.list());
+  ipc.handle('presentations:list', () => presentations.list());
 
-  ipcMain.handle('presentations:create', (_e, req: { paperId: string | null; title: string }) =>
+  ipc.handle('presentations:create', (req: { paperId: string | null; title: string }) =>
     presentations.insert('paper', req.paperId, req.title),
   );
 
-  ipcMain.handle('presentations:generateSlides', async (_e, req: { id: string }) => {
+  ipc.handle('presentations:generateSlides', async (req: { id: string }) => {
     const pr = presentations.get(req.id);
     if (!pr) return { ok: false, message: '演示不存在' };
     const p = pr.sourceId ? papers.get(pr.sourceId) : null;
@@ -536,11 +579,11 @@ export function registerIpc(ipcMain: IpcMain, deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle('presentations:delete', (_e, req: { id: string }) => {
+  ipc.handle('presentations:delete', (req: { id: string }) => {
     presentations.remove(req.id);
   });
 
-  ipcMain.handle('presentations:export', async (_e, req: { id: string }) => {
+  ipc.handle('presentations:export', async (req: { id: string }) => {
     const pr = presentations.get(req.id);
     if (!pr) return { ok: false, message: '演示不存在' };
     if (pr.slides.length === 0) return { ok: false, message: '请先生成幻灯片提纲' };

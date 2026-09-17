@@ -288,6 +288,17 @@ export type SummaryEvent =
   | { id: string; kind: 'done' }
   | { id: string; kind: 'error'; message: string };
 
+/**
+ * papers:event 推送负载（渲染层 window.paper.onPapersEvent 订阅）。
+ *
+ * PDF 下载改为后台任务：源站（arXiv 等）单连接限速严重，整篇可能要数分钟，
+ * 若让 RPC 同步等待，网关会先超时并回 "Bad Gateway"。
+ */
+export type PapersEvent =
+  | { type: 'progress'; id: string; loaded: number; total: number | null }
+  | { type: 'done'; id: string; path: string; elapsedMs?: number }
+  | { type: 'error'; id: string; message: string };
+
 // ── 行内批注 ────────────────────────────────────────────────
 
 export type NoteType = 'highlight' | 'comment';

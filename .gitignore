@@ -9,3 +9,5 @@ dist-electron/
 # 临时调试
 .spike/
 *.log
+# Web(Host) 版 TypeScript 构建产物
+dist-host/

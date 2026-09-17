@@ -1,6 +1,14 @@
 // P3 文献库状态：检索结果、已入库论文、总结流式缓冲与历史。
 import { create } from 'zustand';
-import type { PaperHit, PaperRecord, SummaryEvent, SummaryRecord, NoteRecord, NoteType } from '../../shared/types';
+import type {
+  PaperHit,
+  PaperRecord,
+  PapersEvent,
+  SummaryEvent,
+  SummaryRecord,
+  NoteRecord,
+  NoteType,
+} from '../../shared/types';
 
 export interface StreamingSummary {
   paperId: string;
@@ -22,7 +30,19 @@ interface LibraryStore {
   loadPapers: () => Promise<void>;
   saveHit: (hit: PaperHit) => Promise<void>;
   removePaper: (id: string) => Promise<void>;
-  downloadPdf: (id: string) => Promise<{ ok: boolean; path?: string | null; message?: string }>;
+  /** 已发起/进行中的 PDF 下载任务（按论文 id）。 */
+  pdfJobs: Record<string, PdfJobState>;
+  /**
+   * 发起 PDF 下载：立即返回（后台任务），进度与结果经 papers:event 推送后由
+   * handlePapersEvent 写回 pdfJobs。
+   */
+  downloadPdf: (id: string) => Promise<{
+    ok: boolean;
+    status?: 'started' | 'running' | 'done';
+    path?: string | null;
+    message?: string;
+  }>;
+  handlePapersEvent: (evt: PapersEvent) => void;
   loadSummaries: (paperId: string) => Promise<void>;
   startSummary: (
     paperId: string,
@@ -37,6 +57,27 @@ interface LibraryStore {
   deleteNote: (id: string) => Promise<void>;
 }
 
+/** PDF 后台下载任务状态（进度来自 papers:event）。 */
+export interface PdfJobState {
+  status: 'running' | 'done' | 'error';
+  loaded: number;
+  total: number | null;
+  path?: string | null;
+  message?: string;
+  elapsedMs?: number;
+}
+
+/** 下载按钮/提示条用的进度文案，如「下载中…42%」。 */
+export function pdfProgressLabel(job?: PdfJobState): string {
+  if (!job || job.status === 'error') return '下载中…';
+  if (job.total && job.total > 0) {
+    const pct = Math.min(99, Math.round((job.loaded / job.total) * 100));
+    return `下载中…${pct}%`;
+  }
+  if (job.loaded > 0) return `下载中…${(job.loaded / 1048576).toFixed(1)}MB`;
+  return '下载中…';
+}
+
 const emptyStream = (paperId: string): StreamingSummary => ({ paperId, text: '', error: null, running: true });
 
 export const useLibraryStore = create<LibraryStore>((set, get) => ({
@@ -48,6 +89,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   summaries: {},
   streaming: {},
   notes: {},
+  pdfJobs: {},
 
   runSearch: async (query, limit, offset, cursor) => {
     if (!query.trim()) return { nextCursor: null, count: 0 };
@@ -87,11 +129,52 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
   downloadPdf: async (id) => {
     const res = (await window.paper.invoke('papers:downloadPdf', { id })) as {
       ok: boolean;
+      status?: 'started' | 'running' | 'done';
       path?: string | null;
       message?: string;
     };
-    if (res.ok) await get().loadPapers();
+    if (res.ok && res.path) {
+      // 本地已有有效 PDF：直接完成，无需等事件。
+      set((st) => ({
+        pdfJobs: { ...st.pdfJobs, [id]: { status: 'done', loaded: 0, total: null, path: res.path ?? null } },
+      }));
+      await get().loadPapers();
+    } else if (res.ok) {
+      set((st) => ({
+        pdfJobs: {
+          ...st.pdfJobs,
+          [id]: { ...(st.pdfJobs[id] ?? { loaded: 0, total: null }), status: 'running' },
+        },
+      }));
+    }
     return res;
+  },
+
+  handlePapersEvent: (evt) => {
+    set((st) => {
+      const prev: PdfJobState = st.pdfJobs[evt.id] ?? { status: 'running', loaded: 0, total: null };
+      if (evt.type === 'progress') {
+        return {
+          pdfJobs: { ...st.pdfJobs, [evt.id]: { ...prev, status: 'running', loaded: evt.loaded, total: evt.total } },
+        };
+      }
+      if (evt.type === 'done') {
+        return {
+          pdfJobs: {
+            ...st.pdfJobs,
+            [evt.id]: {
+              status: 'done',
+              loaded: prev.total ?? prev.loaded,
+              total: prev.total,
+              path: evt.path,
+              elapsedMs: evt.elapsedMs,
+            },
+          },
+        };
+      }
+      return { pdfJobs: { ...st.pdfJobs, [evt.id]: { ...prev, status: 'error', message: evt.message } } };
+    });
+    if (evt.type === 'done') void get().loadPapers();
   },
 
   loadSummaries: async (paperId) => {

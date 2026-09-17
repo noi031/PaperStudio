@@ -954,7 +954,14 @@ export function ReaderPage({
                         size="small"
                         variant="outlined"
                         startIcon={<OpenInNewIcon />}
-                        onClick={() => void window.paper.invoke('markdown:open', { path: s.mdPath! })}
+                        onClick={() =>
+                            void window.paper
+                              .invoke('markdown:open', { path: s.mdPath! })
+                              .then((r) => {
+                                // Web 版返回可访问 URL（服务端已渲染 HTML）；Electron 版自带窗口，无 url。
+                                const url = (r as { url?: string } | undefined)?.url;
+                                if (url) window.open(url, '_blank', 'noopener');
+                              })}
                       >
                         打开 Markdown
                       </Button>

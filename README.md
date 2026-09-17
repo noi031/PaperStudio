@@ -1,6 +1,6 @@
 # PaperStudio · 论文工作台
 
-面向科研工作流的一站式桌面应用（Electron + React）：**检索论文 → 阅读批注 → AI 总结 → 研究方向建议 → 论文写作（LaTeX）→ 分享 PPT**，并内嵌 dsh AI 助手（可与工作台数据联动）。
+面向科研工作流的一站式桌面应用（Electron + React）：**检索论文 → 阅读批注 → AI 总结 → 研究方向建议 → 论文写作（LaTeX）→ 分享 PPT**，并内嵌 EchoCap AI 助手（模型与代理能力由 Echo 平台提供）。
 
 > 本文档的目标：让任何人（包括 AI 代理）**只读这一份 README，就能从零安装依赖、构建并启动 PaperStudio**。所有命令均以 Windows 10/11 + PowerShell 为例；路径含空格的目录（如 `E:\personal files\...`）命令同样有效。
 
@@ -15,7 +15,7 @@
 | 写作 | 以 1 篇主论文 + 多篇参考论文为上下文生成大纲，逐节 AI 撰写 **LaTeX 源码**，导出 `.docx` / `.md` / `.tex` / `.bib`（xelatex 可直接编译） |
 | 方向建议 | 基于论文列表生成 3-5 条创意与研究方向 |
 | 分享 PPT | AI 生成提纲 → 导出 `.pptx` |
-| AI 助手 | dsh 引擎驱动的多会话助手，可调用工作台数据 |
+| AI 助手 | EchoCap（平台能力网关）驱动的多会话助手，可与工作台数据联动 |
 
 ---
 
@@ -53,7 +53,7 @@ cd PaperStudio
 npm install
 ```
 
-安装过程会自动执行 `postinstall` 脚本（`scripts/fix-dsh-dupes.mjs`，修复 dsh 引擎的依赖重复问题），通常无需干预。
+安装过程无需额外后置脚本（原 dsh 依赖清理脚本 `scripts/fix-dsh-dupes.mjs` 已随替换移除）。
 
 安装完成后**必须**为 Electron 重新编译原生模块 better-sqlite3（Node 与 Electron 的 V8 ABI 不同）：
 
@@ -102,13 +102,14 @@ npm start
 ### 首次启动
 
 1. 应用窗口打开后，进入左侧「设置」页；
-2. 填写 **LLM 配置**（应用所有 AI 能力依赖一个 OpenAI 兼容的 LLM 端点）：
+2. **无需填写 LLM 配置**：应用所有 AI 能力（总结 / 方向建议 / 写作 / 演示 / AI 助手）都经
+   Echo 平台能力网关（ECHO_CAP）调用，模型与鉴权由平台提供；设置页的「LLM 端点 / LLM API Key」
+   已废弃，字段保留仅为兼容旧库。
 
-   | 字段 | 示例 |
+   | 运行前提 | 说明 |
    |---|---|
-   | Base URL | `http://192.168.1.48:3000/v1`（你自己的端点，需以 `/v1` 结尾） |
-   | 模型名 | `deepseek-v4-flash`（与你的端点匹配） |
-   | API Key | 你的端点密钥 |
+   | `ECHO_CAP_SOCKET` | 平台注入的 Unix Socket（或 `~/.echo/sys/capabilities.properties`） |
+   | `ECHO_CAP_AUTH_KEY` | 平台签发的会话级鉴权 key（只在主进程使用，不进渲染层） |
 
    点击「保存」。若已有 C 盘 `%APPDATA%\paperstudio` 旧数据，启动时会被自动复制迁移到项目 `storage/`（首次启动的迁移是幂等的，失败也不影响使用）。
 
@@ -127,7 +128,7 @@ PaperStudio/
     ├── paperstudio.db        # 主数据库：设置/论文/批注/草稿/方向/PPT/会话
     ├── papers/               # 下载的论文 PDF
     ├── exports/              # 导出的 docx/md/tex/bib/pptx
-    ├── .dsh / blob_storage/  # dsh 引擎数据
+    ├── logs/                 # agent-host.log（EchoCap 代理宿主日志）
     └── …（Electron 自身缓存）
 ```
 
@@ -156,13 +157,14 @@ npm test
 ## 8. 技术架构（给想改代码的人）
 
 ```
-electron/main.ts         # 主进程入口：storage 重定向/迁移、创建窗口、注册 IPC、管理 dsh 引擎
+electron/main.ts         # 主进程入口：storage 重定向/迁移、创建窗口、注册 IPC、托管 EchoCap 代理宿主
 src/main/*.ts            # 主进程服务：db/paperRepo/pdfService(含 pdfjs 提取)/summary 等
 src/shared/types.ts      # IPC 契约（IpcContract）与领域类型（PaperRecord/DraftRecord…）
 src/renderer/            # React 渲染层：页面 + zustand store
   pages/                 #   Library/Search/Reader/Directions/Writing/Presentation/Agent/Settings
   store/                 #   zustand stores（经 preload 的 window.paper.invoke 调 IPC）
-src/main/agentHost.ts    # dsh 引擎托管：子进程 + MCP 入口注入
+src/main/agentHost.ts    # EchoCap 代理宿主：sub_agent 回合轮询 → AgentEvent
+src/main/echoCap.ts      # ECHO_CAP 客户端：Unix Socket RPC（sub_agent.send/query、model.call）
 ```
 
 - **IPC 全链路**：按钮 → store action → `window.paper.invoke(channel, payload)` → `ipcMain.handle` → 主进程服务 → 返回。
@@ -180,7 +182,7 @@ src/main/agentHost.ts    # dsh 引擎托管：子进程 + MCP 入口注入
 | 打开 PDF 报 `UnknownErrorException: standardFontDataUrl` | 渲染层产物缺字体目录：重新执行 `npm run build`（开发模式无需处理） |
 | 打开 PDF 报 `Invalid factory url ... must include trailing slash` | 只发生在开发模式加载旧构建缓存：完全停止 `npm run dev`（Ctrl+C 两次）后重新启动 |
 | 检索无结果 / 下载失败 | 检查网络与 arXiv/Semantic Scholar 可达性；「未入库」时先点「保存」再下载 |
-| AI 功能报「未配置 LLM API Key」 | 设置页填写 Base URL / 模型名 / API Key 并保存 |
+| AI 功能报「EchoCap 不可用」 | 确认进程运行在注入 `ECHO_CAP_SOCKET` / `ECHO_CAP_AUTH_KEY` 的环境中；无需在设置页填写 LLM 凭证 |
 | `npm install` 卡在 better-sqlite3 编译 | 补装 VS Build Tools（C++ 桌面开发）+ Python 3 后重试，或使用 npmmirror 镜像 |
 | 端口 5173 被占用 | 关掉占用进程，或改用 `npm run dev:renderer` 只启动前端调试 |
 

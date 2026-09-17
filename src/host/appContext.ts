@@ -1,0 +1,128 @@
+// Web 宿主装配：把原 electron/main.ts 的服务装配逻辑复用到纯 Node 服务端。
+//
+// Electron 版仍由 electron/main.ts 自行装配窗口与菜单；两版共享同一套 src/main 服务层
+// 与同一份 IPC 契约（通道名、请求/响应形状完全一致），差异只在「谁来实现 HandlerRegistrar
+// 与 HostEmit」：Electron 是 ipcMain + webContents.send，Web 版是 HTTP RPC + SSE。
+import fs from 'node:fs';
+import path from 'node:path';
+import { openDb, type Db } from '../main/db.js';
+import { AgentHost } from '../main/agentHost.js';
+import { AgentRepo } from '../main/agentRepo.js';
+import { AgentService } from '../main/agentService.js';
+import { DirectionRepo } from '../main/directionRepo.js';
+import { DraftRepo } from '../main/draftRepo.js';
+import { NoteRepo } from '../main/noteRepo.js';
+import { PaperRepo } from '../main/paperRepo.js';
+import { PdfService, resolveStorageDir } from '../main/pdfService.js';
+import { PresentationRepo } from '../main/presentationRepo.js';
+import { SummaryRepo } from '../main/summaryRepo.js';
+import { SummaryService } from '../main/summaryService.js';
+import type { HostEmit, IpcDeps } from '../main/ipc.js';
+
+export interface AppContext {
+  deps: IpcDeps;
+  /** 数据根目录（ECHO_APP_DATA_DIR）。 */
+  storageRoot: string;
+  /** 论文 PDF 目录。 */
+  storageDir: string;
+  /** 导出文件目录（docx/md/tex/bib/pptx）。 */
+  exportDir: string;
+  /** 总结 Markdown 目录（含 images/ 与渲染后的 .html）。 */
+  markdownDir: string;
+  /** 上传暂存目录（浏览器上传的本地 PDF / 论文包）。 */
+  uploadDir: string;
+  agentService: AgentService;
+  db: Db;
+  dispose(): Promise<void>;
+}
+
+export interface CreateAppContextOptions {
+  /** 数据根目录；App Runtime 传 ECHO_APP_DATA_DIR。 */
+  storageRoot: string;
+  /** 事件广播器（SSE）。 */
+  emit: HostEmit;
+}
+
+export function createAppContext(opts: CreateAppContextOptions): AppContext {
+  const storageRoot = opts.storageRoot;
+  fs.mkdirSync(storageRoot, { recursive: true });
+
+  const db = openDb(path.join(storageRoot, 'paperstudio.db'));
+
+  // 代理宿主日志：沿用 Electron 版的落盘位置（storage/logs/agent-host.log）。
+  const engineLogPath = path.join(storageRoot, 'logs', 'agent-host.log');
+  fs.mkdirSync(path.dirname(engineLogPath), { recursive: true });
+  const appendLog = (line: string): void => {
+    try {
+      fs.appendFileSync(engineLogPath, `[${new Date().toISOString()}] ${line}`);
+    } catch {
+      /* 日志失败不影响运行 */
+    }
+  };
+
+  const host = new AgentHost({
+    settings: () => db.getSettings(),
+    onLog: (line) => appendLog(`[host] ${line}\n`),
+  });
+
+  const agentService = new AgentService({
+    repo: new AgentRepo(db),
+    host,
+    getSettings: () => db.getSettings(),
+    emit: opts.emit,
+  });
+
+  const settings = db.getSettings();
+  const storageDir = resolveStorageDir(settings.storageDir, path.join(storageRoot, 'papers'));
+  fs.mkdirSync(storageDir, { recursive: true });
+  const exportDir = path.join(storageRoot, 'exports');
+  fs.mkdirSync(exportDir, { recursive: true });
+  const markdownDir = path.join(storageRoot, 'markdown');
+  fs.mkdirSync(markdownDir, { recursive: true });
+  const uploadDir = path.join(storageRoot, 'uploads');
+  fs.mkdirSync(uploadDir, { recursive: true });
+
+  const summaries = new SummaryRepo(db.raw);
+  const summary = new SummaryService({
+    getSettings: () => db.getSettings(),
+    emit: opts.emit,
+    markdownDir,
+    insertSummary: (paperId, kind, content, model, mdPath) => {
+      // 刷新制：同类型总结覆盖旧的（先删旧再插新），与原实现一致。
+      summaries.replace(paperId, kind, content, model, mdPath);
+    },
+  });
+
+  const deps: IpcDeps = {
+    emit: opts.emit,
+    db,
+    agent: agentService,
+    papers: new PaperRepo(db.raw),
+    pdf: new PdfService(storageDir),
+    summaries,
+    summary,
+    directions: new DirectionRepo(db.raw),
+    drafts: new DraftRepo(db.raw),
+    presentations: new PresentationRepo(db.raw),
+    notes: new NoteRepo(db.raw),
+    getSettings: () => db.getSettings(),
+    storageDir,
+    exportDir,
+    markdownDir,
+  };
+
+  return {
+    deps,
+    storageRoot,
+    storageDir,
+    exportDir,
+    markdownDir,
+    uploadDir,
+    agentService,
+    db,
+    async dispose() {
+      await agentService.dispose();
+      db.close();
+    },
+  };
+}

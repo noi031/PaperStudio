@@ -1,6 +1,6 @@
 // P6 草稿仓储：drafts 表读写。
 import { randomUUID } from 'node:crypto';
-import type { Database } from 'better-sqlite3';
+import type { SqliteDb } from './sqlite.js';
 import type { DraftOutlineItem, DraftRecord, DraftSection } from '../shared/types.js';
 
 interface DraftRow {
@@ -37,7 +37,7 @@ function toRecord(r: DraftRow): DraftRecord {
 }
 
 export class DraftRepo {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: SqliteDb) {}
 
   list(): DraftRecord[] {
     const rows = this.db.prepare('SELECT * FROM drafts ORDER BY created_at DESC').all() as DraftRow[];

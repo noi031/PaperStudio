@@ -5,6 +5,8 @@ import type { Db } from './db';
 export interface AgentSession {
   id: string;
   title: string;
+  /** 会话标识：原 dsh 引擎会话 id，现作为 EchoCap sub-agent 的 context_path 种子
+   *  （列名 dsh_session_id 保留，避免旧库迁移）。 */
   dshSessionId: string;
   contextJson: string;
   createdAt: number;
@@ -93,7 +95,7 @@ export class AgentRepo {
   }
 
   /**
-   * 引擎（重新）启动后调用：所有既有会话的 dshSessionId 在旧引擎进程里已失效，
+   * 代理宿主（重新）启动后调用：所有既有会话的 dshSessionId（sub-agent context 种子）已失效，
    * 新引擎用旧 id prompt 会命中持久化里的「已销毁 agent」→ 报错无回复。
    * 统一轮换为新 UUID，让下次 prompt 走「新建会话」路径。
    */

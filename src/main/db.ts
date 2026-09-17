@@ -1,6 +1,6 @@
-// SQLite schema 与初始化（better-sqlite3，同步）。
+// SQLite schema 与初始化（同步；驱动由 sqlite.ts 适配层选择）。
 // 设计稿 7 表 + settings + agent_sessions（助手页会话与 dsh 会话的映射）。
-import Database from 'better-sqlite3';
+import { openSqlite, type SqliteDb } from './sqlite.js';
 import type { PaperSettings } from '../shared/types.js';
 import { DEFAULT_SETTINGS } from '../shared/types.js';
 
@@ -105,10 +105,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_
 `;
 
 export class Db {
-  private db: Database.Database;
+  private db: SqliteDb;
 
   constructor(filename: string) {
-    this.db = new Database(filename);
+    this.db = openSqlite(filename);
     this.db.pragma('journal_mode = WAL');
     this.db.exec(SCHEMA);
     this.migrate();
@@ -143,7 +143,7 @@ export class Db {
     }
   }
 
-  get raw(): Database.Database {
+  get raw(): SqliteDb {
     return this.db;
   }
 

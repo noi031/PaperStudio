@@ -1,6 +1,6 @@
 // P7 演示仓储：presentations 表读写。
 import { randomUUID } from 'node:crypto';
-import type { Database } from 'better-sqlite3';
+import type { SqliteDb } from './sqlite.js';
 import type { PresentationRecord, SlideItem } from '../shared/types.js';
 
 interface PresentationRow {
@@ -26,7 +26,7 @@ function toRecord(r: PresentationRow): PresentationRecord {
 }
 
 export class PresentationRepo {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: SqliteDb) {}
 
   list(): PresentationRecord[] {
     const rows = this.db.prepare('SELECT * FROM presentations ORDER BY created_at DESC').all() as PresentationRow[];

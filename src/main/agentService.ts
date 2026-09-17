@@ -1,16 +1,17 @@
 // agent 编排服务：连接 dsh 引擎（AgentHost）、会话仓储（AgentRepo）与渲染进程。
 // 负责消息落库、事件累积与 webContents 转发。
 import { randomUUID } from 'node:crypto';
-import type { BrowserWindow } from 'electron';
 import type { AgentRepo, AgentSession } from './agentRepo';
 import type { AgentHost, AgentEvent } from './agentHost';
+import type { HostEmit } from './ipc';
 import type { PaperSettings } from '../shared/types.js';
 
 export interface AgentServiceOptions {
   repo: AgentRepo;
   host: AgentHost;
   getSettings: () => PaperSettings;
-  getWindow: () => BrowserWindow | null;
+  /** 事件发射器（Electron: webContents.send；Web: SSE 广播）。 */
+  emit: HostEmit;
 }
 
 interface StreamState {
@@ -64,7 +65,7 @@ export class AgentService {
   health(): { ok: boolean; version?: string; message?: string } {
     if (this.started && this.opts.host.ready)
       return { ok: true, version: this.version };
-    return { ok: false, message: this.started ? 'dsh 引擎未就绪' : 'dsh 引擎未启动（P2 后可用）' };
+    return { ok: false, message: this.started ? 'EchoCap 代理未就绪' : 'EchoCap 代理未启动' };
   }
 
   listSessions(): AgentSession[] {
@@ -223,7 +224,7 @@ export class AgentService {
   }
 
   private emitToWindow(payload: unknown): void {
-    this.opts.getWindow()?.webContents.send('agent:event', payload);
+    this.opts.emit('agent:event', payload);
   }
 
   /**
