@@ -117,7 +117,7 @@ export function App() {
       </Drawer>
       <Box component="main" sx={{ flexGrow: 1, p: 3, overflow: 'auto', mt: 8 }}>
         {pages.map((p) => (
-          <Box key={p.key} sx={{ display: page === p.key ? 'block' : 'none' }}>
+          <Box key={p.key} sx={{ display: page === p.key ? 'block' : 'none', height: '100%' }}>
             {p.node}
           </Box>
         ))}
