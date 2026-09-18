@@ -166,6 +166,12 @@ export function ReaderPage({
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [scale, setScale] = useState(1.0);
+  // 适配宽度：默认按容器宽度缩放论文（填满阅读区）；手动缩放后退出。
+  const [fitWidth, setFitWidth] = useState(true);
+  const fitWidthRef = useRef(true);
+  useEffect(() => {
+    fitWidthRef.current = fitWidth;
+  }, [fitWidth]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedText, setSelectedText] = useState('');
@@ -259,7 +265,9 @@ export function ReaderPage({
         // setDocument 异步创建页面（_pages 在 Promise.all 后填充）：必须等页面就绪
         // 再设 currentScale，否则 _pages 为空 → 渲染中断（「renderView TypeError / scrollPageIntoView 无效页码」）。
         eventBus.on('pagesloaded', () => {
-          viewer.currentScale = scale;
+          // 默认「适配宽度」：论文填满阅读区宽度（随容器尺寸自动缩放）。
+          if (fitWidthRef.current) (viewer as unknown as { currentScaleValue: string }).currentScaleValue = 'page-width';
+          else viewer.currentScale = scale;
         });
         setLoading(false);
 
@@ -341,6 +349,7 @@ export function ReaderPage({
     if (!viewer) return;
     const next = Math.max(0.6, Math.min(3, scale + delta));
     setScale(next);
+    setFitWidth(false); // 手动缩放后退出「适配宽度」
     viewer.currentScale = next;
   };
 
@@ -718,7 +727,7 @@ export function ReaderPage({
             {title || '加载中…'}
           </Typography>
           <Button size="small" variant="outlined" onClick={() => void zoom(-0.2)}>−</Button>
-          <Typography variant="caption">{Math.round(scale * 100)}%</Typography>
+          <Typography variant="caption">{fitWidth ? '适配宽度' : `${Math.round(scale * 100)}%`}</Typography>
           <Button size="small" variant="outlined" onClick={() => void zoom(0.2)}>+</Button>
           <Typography variant="caption">{pageCount ? `${pageNum} / ${pageCount}` : ''}</Typography>
         </Stack>
