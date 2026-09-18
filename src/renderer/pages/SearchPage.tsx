@@ -146,6 +146,10 @@ export function SearchPage() {
     await saveHit(h);
   };
 
+  // 检索结果只显示有 PDF 链接的论文（方便保存后去文献库下载/阅读）。
+  const keywordPdfHits = hits.filter((h) => Boolean(h.pdfUrl));
+  const agenticPdfHits = agenticHits.filter((h) => Boolean(h.pdfUrl));
+
   return (
     <Box sx={{ p: 2 }}>
       <Typography variant="h5" gutterBottom>
@@ -178,9 +182,9 @@ export function SearchPage() {
             <Button variant="outlined" disabled={searching || noMore} onClick={() => void handleNext()}>
               下一页
             </Button>
-            {hits.length > 0 && (
+            {keywordPdfHits.length > 0 && (
               <Typography variant="caption" sx={{ alignSelf: 'center' }}>
-                第 {page} 页（每页 {PAGE_SIZE} 条）{noMore ? ' · 已到最后一页' : ''}
+                第 {page} 页 · 本页 {keywordPdfHits.length} 条有 PDF{noMore ? ' · 已到最后一页' : ''}
               </Typography>
             )}
           </Stack>
@@ -248,7 +252,7 @@ export function SearchPage() {
         </>
       )}
 
-      {mode === 'keyword' && hits.length > 0 && (
+      {mode === 'keyword' && keywordPdfHits.length > 0 && (
         <TableContainer component={Paper}>
           <Table size="small">
             <TableHead>
@@ -261,7 +265,7 @@ export function SearchPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {hits.map((h, i) => (
+              {keywordPdfHits.map((h, i) => (
                 <TableRow key={`${h.source}-${h.externalId}-${i}`}>
                   <TableCell sx={{ maxWidth: 480 }}>
                     <Typography variant="body2">{latexToText(h.title) || h.title}</Typography>
@@ -296,8 +300,11 @@ export function SearchPage() {
           </Table>
         </TableContainer>
       )}
+      {mode === 'keyword' && !searching && hits.length > 0 && keywordPdfHits.length === 0 && (
+        <Typography variant="body2" color="text.secondary">检索结果中没有带 PDF 的论文，换个关键词试试。</Typography>
+      )}
 
-      {mode === 'agentic' && agenticHits.length > 0 && (
+      {mode === 'agentic' && agenticPdfHits.length > 0 && (
         <TableContainer component={Paper}>
           <Table size="small">
             <TableHead>
@@ -311,7 +318,7 @@ export function SearchPage() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {agenticHits.map((h, i) => {
+              {agenticPdfHits.map((h, i) => {
                 const rel = agenticRelevance[`${h.source}:${h.externalId.replace(/v\d+$/, '')}`]
                   ?? agenticRelevance[`${h.source}:${h.externalId}`];
                 return (
@@ -362,8 +369,12 @@ export function SearchPage() {
           </Table>
         </TableContainer>
       )}
-      {mode === 'agentic' && !agenticSearching && !agenticError && agenticHits.length === 0 && agenticQuestion.trim() !== '' && (
-        <Typography variant="body2" color="text.secondary">AI 没有找到相关结果，换个问法试试。</Typography>
+      {mode === 'agentic' && !agenticSearching && !agenticError && agenticQuestion.trim() !== '' && (
+        <Typography variant="body2" color="text.secondary">
+          {agenticHits.length > 0
+            ? 'AI 结果中没有带 PDF 的论文，换个问法试试。'
+            : 'AI 没有找到相关结果，换个问法试试。'}
+        </Typography>
       )}
     </Box>
   );
