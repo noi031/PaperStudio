@@ -36,7 +36,7 @@ interface LibraryStore {
    * 发起 PDF 下载：立即返回（后台任务），进度与结果经 papers:event 推送后由
    * handlePapersEvent 写回 pdfJobs。多篇可同时下载。
    */
-  downloadPdf: (id: string) => Promise<{
+  downloadPdf: (id: string, force?: boolean) => Promise<{
     ok: boolean;
     status?: 'started' | 'running' | 'done';
     path?: string | null;
@@ -131,8 +131,8 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     await get().loadPapers();
   },
 
-  downloadPdf: async (id) => {
-    const res = (await window.paper.invoke('papers:downloadPdf', { id })) as {
+  downloadPdf: async (id, force) => {
+    const res = (await window.paper.invoke('papers:downloadPdf', { id, force })) as {
       ok: boolean;
       status?: 'started' | 'running' | 'done';
       path?: string | null;

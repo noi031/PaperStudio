@@ -142,10 +142,10 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
   // `Unexpected token 'B', "Bad Gateway " is not valid JSON`。
   // 因此这里立即返回任务状态，进度与结果统一经 papers:event 推送。
   // 多任务并发：pdfJobs 按论文 id 记录，可同时下载多篇；每篇可单独停止。
-  ipc.handle('papers:downloadPdf', (req: { id: string }) => {
+  ipc.handle('papers:downloadPdf', (req: { id: string; force?: boolean }) => {
     const p = papers.get(req.id);
     if (!p) return { ok: false, message: '论文不存在' };
-    if (p.pdfPath && fs.existsSync(p.pdfPath)) return { ok: true, status: 'done', path: p.pdfPath };
+    if (!req.force && p.pdfPath && fs.existsSync(p.pdfPath)) return { ok: true, status: 'done', path: p.pdfPath };
     if (!p.pdfUrl) return { ok: false, message: '该论文无可用 PDF 链接' };
     if (pdfJobs.has(p.id)) return { ok: true, status: 'running' };
 
@@ -164,6 +164,7 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
             deps.emit('papers:event', { type: 'progress', id: p.id, loaded, total });
           },
           signal: controller.signal,
+          force: req.force,
         });
         papers.setPdfPath(p.id, pdfPath);
         deps.emit('papers:event', {

@@ -20,19 +20,24 @@ export interface PdfEnsureOptions {
   onProgress?: (progress: DownloadProgress) => void;
   /** 外部取消信号（用户停止下载时 abort）。 */
   signal?: AbortSignal;
+  /** 强制重新下载（跳过本地已存在文件的复用），用于「重新下载」。 */
+  force?: boolean;
 }
 
 export class PdfService {
   constructor(private readonly storageDir: string) {}
 
-  /** 确保 PDF 已落到本地，返回绝对路径；已存在的有效 PDF 直接复用。 */
+  /** 确保 PDF 已落到本地，返回绝对路径；已存在的有效 PDF 直接复用（除非 force）。 */
   async ensureDownloaded(paper: PaperRecord, options: PdfEnsureOptions = {}): Promise<string> {
     // 早先失败的“下载”可能把网关错误页当 PDF 存盘，这里按文件头校验，
     // 否则坏文件会被一直复用（阅读器直接报错）。
-    if (paper.pdfPath && isPdfFile(paper.pdfPath)) return paper.pdfPath;
+    if (!options.force && paper.pdfPath && isPdfFile(paper.pdfPath)) return paper.pdfPath;
     if (!paper.pdfUrl) throw new Error('该论文无可用 PDF 链接');
     const name = safeFileNameFromUrl(paper.pdfUrl) || paper.externalId || paper.id;
-    return downloadPdf(paper.pdfUrl, this.storageDir, name, { onProgress: options.onProgress, signal: options.signal });
+    return downloadPdf(paper.pdfUrl, this.storageDir, name, {
+      onProgress: options.onProgress,
+      signal: options.signal,
+    });
   }
 
   /** 读取论文 PDF：无有效本地文件时按 pdf_url 下载到存储目录后读取。返回实际文件路径。 */

@@ -38,10 +38,11 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
   // PDF 下载已改为后台任务：源站限速下整篇要数分钟，同步等待会被网关判成超时
   // 并回 "Bad Gateway"。这里只负责发起，进度/结果由 papers:event 回调写回 pdfJobs。
   // 多篇可同时下载（pdfJobs 按论文 id 各自记录），每篇可单独停止。
-  const handleDownload = async (id: string) => {
+  // 有 PDF 链接的论文总是显示下载入口：未下载 →「下载 PDF」，已下载 →「重新下载」（强制重下）。
+  const handleDownload = async (id: string, force = false) => {
     setMsg(null);
     try {
-      const res = await downloadPdf(id);
+      const res = await downloadPdf(id, force);
       if (!res.ok) {
         showMsg('error', res.message ?? 'PDF 下载失败');
         return;
@@ -217,7 +218,7 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
                       >
                         {exportingId === p.id ? '导出中…' : '导出'}
                       </Button>
-                      {!p.pdfPath && p.pdfUrl && (
+                      {p.pdfUrl && (
                         pdfJobs[p.id]?.status === 'running' ? (
                           <>
                             <Typography variant="caption" sx={{ alignSelf: 'center' }}>{pdfProgressLabel(pdfJobs[p.id])}</Typography>
@@ -226,8 +227,8 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
                             </Button>
                           </>
                         ) : (
-                          <Button size="small" variant="outlined" onClick={() => void handleDownload(p.id)}>
-                            {pdfJobs[p.id]?.status === 'stopped' ? '继续下载' : pdfJobs[p.id]?.status === 'error' ? '重试下载' : '下载 PDF'}
+                          <Button size="small" variant="outlined" onClick={() => void handleDownload(p.id, Boolean(p.pdfPath))}>
+                            {pdfJobs[p.id]?.status === 'stopped' ? '继续下载' : pdfJobs[p.id]?.status === 'error' ? '重试下载' : p.pdfPath ? '重新下载' : '下载 PDF'}
                           </Button>
                         )
                       )}

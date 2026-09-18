@@ -164,7 +164,7 @@ export interface IpcContract {
   'papers:save': { req: { hit: PaperHit }; res: PaperRecord };
   'papers:delete': { req: { id: string }; res: void };
   'papers:downloadPdf': {
-    req: { id: string };
+    req: { id: string; force?: boolean };
     res: { ok: boolean; status?: 'started' | 'running' | 'done'; path?: string; message?: string };
   };
   'papers:downloadStop': { req: { id: string }; res: { ok: boolean; message?: string } };
