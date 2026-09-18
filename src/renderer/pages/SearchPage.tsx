@@ -1,5 +1,6 @@
 // 检索页：普通关键词检索（arXiv + Semantic Scholar + OpenAlex）+ AI 提问式检索（agentic）。
-import React, { useEffect, useRef, useState } from 'react';
+// 检索结果只提供「保存」入库；PDF 下载只在文献库界面开放。
+import React, { useEffect, useState } from 'react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import TextField from '@mui/material/TextField';
@@ -17,10 +18,8 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
-import Link from '@mui/material/Link';
-import { pdfProgressLabel, useLibraryStore } from '../store/libraryStore';
-import { downloadUrlOf, fileNameOf } from '../fileLink';
-import type { PaperHit, PaperRecord } from '../../shared/types';
+import { useLibraryStore } from '../store/libraryStore';
+import type { PaperHit } from '../../shared/types';
 import { latexToText } from '../../shared/latex';
 
 const SOURCE_LABEL: Record<string, string> = { arxiv: 'arXiv', semantic_scholar: 'S2', openalex: 'OpenAlex' };
@@ -52,12 +51,7 @@ export function SearchPage() {
   const [agenticRelevance, setAgenticRelevance] = useState<Record<string, Relevance>>({});
   const [agenticError, setAgenticError] = useState<string | null>(null);
   const [agenticWarnings, setAgenticWarnings] = useState<string[]>([]);
-  const [downloadMsg, setDownloadMsg] = useState<{
-    kind: 'success' | 'error';
-    text: string;
-    file?: string | null;
-  } | null>(null);
-  const { hits, searching, searchError, searchWarnings, papers, runSearch, loadPapers, saveHit, downloadPdf, stopDownload, pdfJobs } =
+  const { hits, searching, searchError, searchWarnings, papers, runSearch, loadPapers, saveHit } =
     useLibraryStore();
 
   useEffect(() => {
@@ -123,7 +117,6 @@ export function SearchPage() {
     setAgenticHits([]);
     setAgenticQueries([]);
     setAgenticRelevance({});
-    setDownloadMsg(null);
     try {
       const res = (await window.paper.invoke('search:agentic', { question: agenticQuestion.trim() })) as {
         ok: boolean;
@@ -151,54 +144,6 @@ export function SearchPage() {
 
   const handleSave = async (h: PaperHit) => {
     await saveHit(h);
-  };
-
-  // PDF 下载是后台任务：进度与结果经 papers:event 推送写回 pdfJobs。
-  // 多篇可同时下载（每行各自显示进度，可单独停止）。
-  const handleDownload = async (id: string) => {
-    if (!id) {
-      setDownloadMsg({ kind: 'error', text: '未找到已入库的论文记录，请先「保存」' });
-      return;
-    }
-    setDownloadMsg(null);
-    try {
-      const res = await downloadPdf(id);
-      if (!res.ok) {
-        setDownloadMsg({ kind: 'error', text: res.message ?? 'PDF 下载失败' });
-        return;
-      }
-      if (res.status === 'done') {
-        setDownloadMsg({ kind: 'success', text: 'PDF 已下载到：', file: res.path ?? null });
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setDownloadMsg({ kind: 'error', text: message.replace(/^Error invoking remote method '[^']+': /, '') });
-    }
-  };
-
-  // 正在下载的任务数（多任务并发时用于顶部提示）。
-  const downloadingIds = Object.keys(pdfJobs).filter((id) => pdfJobs[id]?.status === 'running');
-
-  // 行内下载单元：多任务并发，各自显示进度，可单独停止。
-  const renderDownloadCell = (h: PaperHit) => {
-    const id = getSavedId(h, papers);
-    if (!id) return null;
-    const job = pdfJobs[id];
-    if (job?.status === 'running') {
-      return (
-        <>
-          <Typography variant="caption" sx={{ alignSelf: 'center' }}>{pdfProgressLabel(job)}</Typography>
-          <Button size="small" variant="outlined" color="warning" onClick={() => void stopDownload(id)}>
-            停止
-          </Button>
-        </>
-      );
-    }
-    return (
-      <Button size="small" variant="outlined" onClick={() => void handleDownload(id)}>
-        {job?.status === 'stopped' ? '继续下载' : job?.status === 'error' ? '重试下载' : '下载 PDF'}
-      </Button>
-    );
   };
 
   return (
@@ -274,7 +219,7 @@ export function SearchPage() {
             </Button>
           </Stack>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-            与普通关键词检索不同：AI 会先分析你的问题生成检索策略，再多源检索，最后为每条结果标注相关程度。结果同样支持保存入库与下载 PDF。
+            与普通关键词检索不同：AI 会先分析你的问题生成检索策略，再多源检索，最后为每条结果标注相关程度。结果同样支持保存入库。
           </Typography>
           {agenticSearching && (
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
@@ -301,28 +246,6 @@ export function SearchPage() {
             </Stack>
           )}
         </>
-      )}
-
-      {downloadingIds.length > 0 && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          {`正在下载 PDF（${downloadingIds.length} 个任务）：可继续检索或总结，也可在列表中单独停止`}
-        </Alert>
-      )}
-
-      {downloadMsg && (
-        <Alert severity={downloadMsg.kind} sx={{ mb: 2 }}>
-          {downloadMsg.text}
-          {downloadMsg.file && downloadUrlOf(downloadMsg.file) && (
-            <Link
-              href={String(downloadUrlOf(downloadMsg.file))}
-              download={fileNameOf(downloadMsg.file)}
-              underline="hover"
-              sx={{ wordBreak: 'break-all' }}
-            >
-              {fileNameOf(downloadMsg.file)}
-            </Link>
-          )}
-        </Alert>
       )}
 
       {mode === 'keyword' && hits.length > 0 && (
@@ -365,7 +288,6 @@ export function SearchPage() {
                           保存
                         </Button>
                       )}
-                      {isSaved(h) && renderDownloadCell(h)}
                     </Stack>
                   </TableCell>
                 </TableRow>
@@ -431,7 +353,6 @@ export function SearchPage() {
                             保存
                           </Button>
                         )}
-                        {isSaved(h) && renderDownloadCell(h)}
                       </Stack>
                     </TableCell>
                   </TableRow>
@@ -446,8 +367,4 @@ export function SearchPage() {
       )}
     </Box>
   );
-}
-
-function getSavedId(h: PaperHit, papers: PaperRecord[]): string | null {
-  return papers.find((p) => p.source === h.source && p.externalId === h.externalId)?.id ?? null;
 }
