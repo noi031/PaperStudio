@@ -14,13 +14,11 @@ import Paper from '@mui/material/Paper';
 import Chip from '@mui/material/Chip';
 import Alert from '@mui/material/Alert';
 import Link from '@mui/material/Link';
-import LinearProgress from '@mui/material/LinearProgress';
 import { pdfProgressLabel, useLibraryStore } from '../store/libraryStore';
 import { downloadUrlOf, fileNameOf } from '../fileLink';
 
 export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void }) {
-  const { papers, loadPapers, removePaper, downloadPdf, pdfJobs } = useLibraryStore();
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const { papers, loadPapers, removePaper, downloadPdf, stopDownload, pdfJobs } = useLibraryStore();
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: 'success' | 'error'; text: string; file?: string | null } | null>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
@@ -34,48 +32,28 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
 
   const showMsg = (kind: 'success' | 'error', text: string, file: string | null = null) => setMsg({ kind, text, file });
 
-  // PDF 下载已改为后台任务：源站限速下整篇要数分钟，同步等待会被网关判成超时
-  // 并回 "Bad Gateway"。这里只负责发起，结果由 papers:event 回调。
-  useEffect(() => {
-    if (!downloadingId) return;
-    const job = pdfJobs[downloadingId];
-    if (!job) return;
-    if (job.status === 'done') {
-      showMsg('success', 'PDF 已下载到：', job.path ?? null);
-      setDownloadingId(null);
-    } else if (job.status === 'error') {
-      showMsg('error', job.message ?? 'PDF 下载失败');
-      setDownloadingId(null);
-    }
-  }, [pdfJobs, downloadingId]);
+  // 正在下载的任务数（多任务并发时用于顶部提示）。
+  const downloadingIds = Object.keys(pdfJobs).filter((id) => pdfJobs[id]?.status === 'running');
 
+  // PDF 下载已改为后台任务：源站限速下整篇要数分钟，同步等待会被网关判成超时
+  // 并回 "Bad Gateway"。这里只负责发起，进度/结果由 papers:event 回调写回 pdfJobs。
+  // 多篇可同时下载（pdfJobs 按论文 id 各自记录），每篇可单独停止。
   const handleDownload = async (id: string) => {
-    setDownloadingId(id);
     setMsg(null);
     try {
       const res = await downloadPdf(id);
       if (!res.ok) {
         showMsg('error', res.message ?? 'PDF 下载失败');
-        setDownloadingId(null);
         return;
       }
       if (res.status === 'done') {
         showMsg('success', 'PDF 已下载到：', res.path ?? null);
-        setDownloadingId(null);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       showMsg('error', message.replace(/^Error invoking remote method '[^']+': /, ''));
-      setDownloadingId(null);
     }
   };
-
-  // 下载进度（总长度已知时显示确定进度，否则不确定进度）。
-  const activeJob = downloadingId ? pdfJobs[downloadingId] : undefined;
-  const activePct =
-    activeJob?.total && activeJob.total > 0
-      ? Math.min(100, Math.round((activeJob.loaded / activeJob.total) * 100))
-      : undefined;
 
   const handleExportBundle = async (id: string) => {
     setExportingId(id);
@@ -193,14 +171,9 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
               )}
             </Alert>
           )}
-          {downloadingId && (
+          {downloadingIds.length > 0 && (
             <Alert severity="info" sx={{ mb: 2 }}>
-              {`正在下载 PDF：${pdfProgressLabel(pdfJobs[downloadingId])}（源站限速时可能需要数分钟，可继续使用其他功能）`}
-              <LinearProgress
-                variant={activePct === undefined ? 'indeterminate' : 'determinate'}
-                value={activePct ?? 0}
-                sx={{ mt: 1 }}
-              />
+              {`正在下载 PDF（${downloadingIds.length} 个任务）：可继续使用其他功能，也可在列表中单独停止`}
             </Alert>
           )}
           <TableContainer component={Paper}>
@@ -245,14 +218,18 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
                         {exportingId === p.id ? '导出中…' : '导出'}
                       </Button>
                       {!p.pdfPath && p.pdfUrl && (
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          disabled={downloadingId !== null}
-                          onClick={() => void handleDownload(p.id)}
-                        >
-                          {downloadingId === p.id ? pdfProgressLabel(pdfJobs[p.id]) : '下载 PDF'}
-                        </Button>
+                        pdfJobs[p.id]?.status === 'running' ? (
+                          <>
+                            <Typography variant="caption" sx={{ alignSelf: 'center' }}>{pdfProgressLabel(pdfJobs[p.id])}</Typography>
+                            <Button size="small" variant="outlined" color="warning" onClick={() => void stopDownload(p.id)}>
+                              停止
+                            </Button>
+                          </>
+                        ) : (
+                          <Button size="small" variant="outlined" onClick={() => void handleDownload(p.id)}>
+                            {pdfJobs[p.id]?.status === 'stopped' ? '继续下载' : pdfJobs[p.id]?.status === 'error' ? '重试下载' : '下载 PDF'}
+                          </Button>
+                        )
                       )}
                       <Button size="small" color="error" variant="outlined" onClick={() => void removePaper(p.id)}>
                         删除

@@ -30,11 +30,11 @@ interface LibraryStore {
   loadPapers: () => Promise<void>;
   saveHit: (hit: PaperHit) => Promise<void>;
   removePaper: (id: string) => Promise<void>;
-  /** 已发起/进行中的 PDF 下载任务（按论文 id）。 */
+  /** 已发起/进行中的 PDF 下载任务（按论文 id；支持并发多任务）。 */
   pdfJobs: Record<string, PdfJobState>;
   /**
    * 发起 PDF 下载：立即返回（后台任务），进度与结果经 papers:event 推送后由
-   * handlePapersEvent 写回 pdfJobs。
+   * handlePapersEvent 写回 pdfJobs。多篇可同时下载。
    */
   downloadPdf: (id: string) => Promise<{
     ok: boolean;
@@ -42,6 +42,8 @@ interface LibraryStore {
     path?: string | null;
     message?: string;
   }>;
+  /** 停止某篇 PDF 下载。 */
+  stopDownload: (id: string) => Promise<void>;
   handlePapersEvent: (evt: PapersEvent) => void;
   loadSummaries: (paperId: string) => Promise<void>;
   startSummary: (
@@ -59,7 +61,7 @@ interface LibraryStore {
 
 /** PDF 后台下载任务状态（进度来自 papers:event）。 */
 export interface PdfJobState {
-  status: 'running' | 'done' | 'error';
+  status: 'running' | 'done' | 'error' | 'stopped';
   loaded: number;
   total: number | null;
   path?: string | null;
@@ -69,7 +71,10 @@ export interface PdfJobState {
 
 /** 下载按钮/提示条用的进度文案，如「下载中…42%」。 */
 export function pdfProgressLabel(job?: PdfJobState): string {
-  if (!job || job.status === 'error') return '下载中…';
+  if (!job) return '下载中…';
+  if (job.status === 'stopped') return '已停止';
+  if (job.status === 'error') return '下载失败';
+  if (job.status === 'done') return '已下载';
   if (job.total && job.total > 0) {
     const pct = Math.min(99, Math.round((job.loaded / job.total) * 100));
     return `下载中…${pct}%`;
@@ -172,9 +177,16 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           },
         };
       }
+      if (evt.type === 'stopped') {
+        return { pdfJobs: { ...st.pdfJobs, [evt.id]: { ...prev, status: 'stopped' } } };
+      }
       return { pdfJobs: { ...st.pdfJobs, [evt.id]: { ...prev, status: 'error', message: evt.message } } };
     });
     if (evt.type === 'done') void get().loadPapers();
+  },
+
+  stopDownload: async (id) => {
+    await window.paper.invoke('papers:downloadStop', { id });
   },
 
   loadSummaries: async (paperId) => {

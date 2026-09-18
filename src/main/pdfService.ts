@@ -18,6 +18,8 @@ export interface PdfReadResult {
 export interface PdfEnsureOptions {
   /** 下载进度回调（源站限速时整篇可能耗时数分钟，调用方据此上报进度）。 */
   onProgress?: (progress: DownloadProgress) => void;
+  /** 外部取消信号（用户停止下载时 abort）。 */
+  signal?: AbortSignal;
 }
 
 export class PdfService {
@@ -30,7 +32,7 @@ export class PdfService {
     if (paper.pdfPath && isPdfFile(paper.pdfPath)) return paper.pdfPath;
     if (!paper.pdfUrl) throw new Error('该论文无可用 PDF 链接');
     const name = safeFileNameFromUrl(paper.pdfUrl) || paper.externalId || paper.id;
-    return downloadPdf(paper.pdfUrl, this.storageDir, name, { onProgress: options.onProgress });
+    return downloadPdf(paper.pdfUrl, this.storageDir, name, { onProgress: options.onProgress, signal: options.signal });
   }
 
   /** 读取论文 PDF：无有效本地文件时按 pdf_url 下载到存储目录后读取。返回实际文件路径。 */

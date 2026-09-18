@@ -93,6 +93,7 @@ export type IpcChannel =
   | 'papers:save'
   | 'papers:delete'
   | 'papers:downloadPdf'
+  | 'papers:downloadStop'
   | 'reader:open'
   | 'summaries:list'
   | 'summary:run'
@@ -166,6 +167,7 @@ export interface IpcContract {
     req: { id: string };
     res: { ok: boolean; status?: 'started' | 'running' | 'done'; path?: string; message?: string };
   };
+  'papers:downloadStop': { req: { id: string }; res: { ok: boolean; message?: string } };
   'papers:importLocalPdf': { req: { path: string }; res: { ok: boolean; paper?: PaperRecord; message?: string } };
   'paper:exportBundle': { req: { id: string }; res: { ok: boolean; path?: string; message?: string } };
   'paper:importBundle': { req: { path: string }; res: { ok: boolean; paper?: PaperRecord; message?: string } };
@@ -304,7 +306,8 @@ export type SummaryEvent =
 export type PapersEvent =
   | { type: 'progress'; id: string; loaded: number; total: number | null }
   | { type: 'done'; id: string; path: string; elapsedMs?: number }
-  | { type: 'error'; id: string; message: string };
+  | { type: 'error'; id: string; message: string }
+  | { type: 'stopped'; id: string };
 
 // ── 行内批注 ────────────────────────────────────────────────
 

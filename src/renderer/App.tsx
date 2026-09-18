@@ -60,39 +60,37 @@ export function App() {
   // 订阅 papers:event（PDF 后台下载的进度与结果）。
   useEffect(() => window.paper.onPapersEvent(handlePapersEvent), [handlePapersEvent]);
 
-  const renderPage = (): React.ReactNode => {
-    switch (page) {
-      case 'search':
-        return <SearchPage />;
-      case 'library':
-        return (
-          <LibraryPage
-            onOpenPaper={(id) => {
-              setReaderPaperId(id);
-              setPage('reader');
-            }}
-          />
-        );
-      case 'reader':
-        return (
-          <ReaderPage
-            paperId={readerPaperId}
-            onBack={() => setPage('library')}
-            onOpenAssistant={() => setPage('assistant')}
-          />
-        );
-      case 'directions':
-        return <DirectionsPage />;
-      case 'writing':
-        return <WritingPage />;
-      case 'present':
-        return <PresentPage />;
-      case 'assistant':
-        return <AssistantPage />;
-      case 'settings':
-        return <SettingsPage />;
-    }
-  };
+  // 所有页面常驻挂载（切换时仅隐藏），跳转后再回来能恢复之前的界面状态
+  // （检索词、分页、AI 检索结果、下载进度等）。
+  const pages: Array<{ key: PageKey; node: React.ReactNode }> = [
+    { key: 'search', node: <SearchPage /> },
+    {
+      key: 'library',
+      node: (
+        <LibraryPage
+          onOpenPaper={(id) => {
+            setReaderPaperId(id);
+            setPage('reader');
+          }}
+        />
+      ),
+    },
+    {
+      key: 'reader',
+      node: (
+        <ReaderPage
+          paperId={readerPaperId}
+          onBack={() => setPage('library')}
+          onOpenAssistant={() => setPage('assistant')}
+        />
+      ),
+    },
+    { key: 'directions', node: <DirectionsPage /> },
+    { key: 'writing', node: <WritingPage /> },
+    { key: 'present', node: <PresentPage /> },
+    { key: 'assistant', node: <AssistantPage /> },
+    { key: 'settings', node: <SettingsPage /> },
+  ];
 
   return (
     <Box sx={{ display: 'flex', height: '100vh' }}>
@@ -118,7 +116,11 @@ export function App() {
         </List>
       </Drawer>
       <Box component="main" sx={{ flexGrow: 1, p: 3, overflow: 'auto', mt: 8 }}>
-        {renderPage()}
+        {pages.map((p) => (
+          <Box key={p.key} sx={{ display: page === p.key ? 'block' : 'none' }}>
+            {p.node}
+          </Box>
+        ))}
       </Box>
     </Box>
   );

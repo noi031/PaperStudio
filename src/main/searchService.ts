@@ -359,6 +359,8 @@ export interface DownloadOptions {
   concurrency?: number;
   /** 单次请求超时（毫秒）。 */
   timeoutMs?: number;
+  /** 外部取消信号（用户停止下载时 abort）。 */
+  signal?: AbortSignal;
 }
 
 const PDF_MAGIC = '%PDF-';
@@ -427,10 +429,11 @@ async function* iterateBody(body: ReadableStream<Uint8Array>): AsyncGenerator<Ui
 async function probePdf(
   pdfUrl: string,
   timeoutMs: number,
+  external?: AbortSignal,
 ): Promise<{ total: number | null; ranges: boolean; body: Buffer | null }> {
   const res = await httpFetch(pdfUrl, {
     headers: { 'User-Agent': UA, Range: 'bytes=0-0' },
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: external ? AbortSignal.any([external, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`PDF HTTP ${res.status}`);
   if (res.status === 206) {
@@ -449,6 +452,7 @@ async function downloadRangeToFd(
   end: number,
   timeoutMs: number,
   onChunk: (bytes: number) => void,
+  external?: AbortSignal,
 ): Promise<void> {
   const expect = end - start + 1;
   let lastErr: unknown = null;
@@ -457,7 +461,7 @@ async function downloadRangeToFd(
     try {
       const res = await httpFetch(pdfUrl, {
         headers: { 'User-Agent': UA, Range: `bytes=${start}-${end}` },
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: external ? AbortSignal.any([external, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
       });
       if (res.status !== 206) throw new Error(`PDF 分片 HTTP ${res.status}`);
       if (!res.body) throw new Error('PDF 分片响应为空');
@@ -485,10 +489,11 @@ async function downloadAllToFd(
   fd: number,
   timeoutMs: number,
   onChunk: (bytes: number) => void,
+  external?: AbortSignal,
 ): Promise<void> {
   const res = await httpFetch(pdfUrl, {
     headers: { 'User-Agent': UA },
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: external ? AbortSignal.any([external, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`PDF HTTP ${res.status}`);
   if (!res.body) throw new Error('PDF 响应为空');
@@ -527,7 +532,7 @@ export async function downloadPdf(
     options.onProgress?.({ loaded, total });
   };
 
-  const probe = await probePdf(pdfUrl, Math.min(timeoutMs, 120_000));
+  const probe = await probePdf(pdfUrl, Math.min(timeoutMs, 120_000), options.signal);
   total = probe.total;
   if (probe.body) {
     if (!isPdfBytes(probe.body)) throw new Error('下载内容不是有效的 PDF（源站可能返回了错误页）');
@@ -549,7 +554,7 @@ export async function downloadPdf(
         const start = i * size;
         const end = Math.min(total - 1, start + size - 1);
         if (start > end) break;
-        jobs.push(downloadRangeToFd(pdfUrl, fd, start, end, timeoutMs, onChunk));
+        jobs.push(downloadRangeToFd(pdfUrl, fd, start, end, timeoutMs, onChunk, options.signal));
       }
       try {
         await Promise.all(jobs);
@@ -557,10 +562,10 @@ export async function downloadPdf(
         // 分片整体失败（站点不支持 206 / 连接被重置）：退回单连接整篇重下。
         loaded = 0;
         options.onProgress?.({ loaded: 0, total });
-        await downloadAllToFd(pdfUrl, fd, timeoutMs, onChunk);
+        await downloadAllToFd(pdfUrl, fd, timeoutMs, onChunk, options.signal);
       }
     } else {
-      await downloadAllToFd(pdfUrl, fd, timeoutMs, onChunk);
+      await downloadAllToFd(pdfUrl, fd, timeoutMs, onChunk, options.signal);
     }
     const size = fs.fstatSync(fd).size;
     if (total && size !== total) throw new Error(`PDF 体积不符（${size}/${total}）`);

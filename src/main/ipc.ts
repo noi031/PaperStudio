@@ -68,8 +68,8 @@ function toMessageLite(m: {
 }
 
 export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
-  // 正在后台下载 PDF 的论文（同一个 id 只跑一个任务）。
-  const pdfJobs = new Map<string, Promise<void>>();
+  // 正在后台下载 PDF 的论文（同一个 id 只跑一个任务；记录 AbortController 用于停止）。
+  const pdfJobs = new Map<string, { controller: AbortController }>();
   const { db, agent, papers, pdf, summaries, summary, directions, drafts, presentations, notes, getSettings, storageDir, exportDir, markdownDir } = deps;
 
   ipc.handle('settings:get', () => db.getSettings());
@@ -141,6 +141,7 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
   // 网关会先判超时并回 "Bad Gateway" 纯文本，前端 JSON.parse 就会抛
   // `Unexpected token 'B', "Bad Gateway " is not valid JSON`。
   // 因此这里立即返回任务状态，进度与结果统一经 papers:event 推送。
+  // 多任务并发：pdfJobs 按论文 id 记录，可同时下载多篇；每篇可单独停止。
   ipc.handle('papers:downloadPdf', (req: { id: string }) => {
     const p = papers.get(req.id);
     if (!p) return { ok: false, message: '论文不存在' };
@@ -150,6 +151,7 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
 
     const startedAt = Date.now();
     let lastEmit = 0;
+    const controller = new AbortController();
     const job = (async () => {
       try {
         const pdfPath = await pdf.ensureDownloaded(p, {
@@ -161,6 +163,7 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
             lastEmit = now;
             deps.emit('papers:event', { type: 'progress', id: p.id, loaded, total });
           },
+          signal: controller.signal,
         });
         papers.setPdfPath(p.id, pdfPath);
         deps.emit('papers:event', {
@@ -170,6 +173,10 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
           elapsedMs: Date.now() - startedAt,
         });
       } catch (err) {
+        if (controller.signal.aborted) {
+          deps.emit('papers:event', { type: 'stopped', id: p.id });
+          return;
+        }
         const message = err instanceof Error ? err.message : String(err);
         // eslint-disable-next-line no-console
         console.warn(`[papers] PDF 下载失败 ${p.id}: ${message}`);
@@ -178,8 +185,17 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
         pdfJobs.delete(p.id);
       }
     })();
-    pdfJobs.set(p.id, job);
+    pdfJobs.set(p.id, { controller });
+    void job;
     return { ok: true, status: 'started' };
+  });
+
+  // 停止某篇 PDF 下载（并发多任务中单独停止）。
+  ipc.handle('papers:downloadStop', (req: { id: string }) => {
+    const job = pdfJobs.get(req.id);
+    if (!job) return { ok: false, message: '没有正在进行的下载' };
+    job.controller.abort();
+    return { ok: true };
   });
 
   // ── 本地 PDF 导入 ─────────────────────────────────────────
