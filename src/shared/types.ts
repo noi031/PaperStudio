@@ -182,7 +182,7 @@ export interface IpcContract {
     res: { id: string };
   };
   'qa:run': {
-    req: { paperTitle: string; fullText: string; question: string };
+    req: { paperId: string; paperTitle: string; fullText: string; question: string };
     res: { id: string };
   };
   'markdown:open': { req: { path: string }; res: { ok: boolean; message?: string; url?: string } };
@@ -302,10 +302,10 @@ export type SummaryEvent =
   | { id: string; kind: 'done' }
   | { id: string; kind: 'error'; message: string };
 
-/** qa:event 推送负载（阅读器 AI 问答流式回答，渲染层 window.paper.onQaEvent 订阅）。 */
+/** qa:event 推送负载（阅读器 AI 问答：回答完成后生成 Markdown，done 携带文件路径）。 */
 export type QaEvent =
   | { id: string; kind: 'delta'; text: string }
-  | { id: string; kind: 'done' }
+  | { id: string; kind: 'done'; mdPath: string | null }
   | { id: string; kind: 'error'; message: string };
 
 /**

@@ -107,7 +107,7 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
       summaries.replace(paperId, kind, content, model, mdPath);
     },
   });
-  const qa = new QaService({ getSettings: () => db.getSettings(), emit: opts.emit });
+  const qa = new QaService({ getSettings: () => db.getSettings(), emit: opts.emit, markdownDir });
 
   const deps: IpcDeps = {
     emit: opts.emit,

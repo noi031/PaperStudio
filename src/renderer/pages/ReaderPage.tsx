@@ -1,5 +1,5 @@
 // 阅读器页：pdfjs 渲染 PDF（canvas + 可选中的文本层），侧栏做选中/全文总结与基于全文/高亮的 AI 问答。
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -24,7 +24,6 @@ import Tooltip from '@mui/material/Tooltip';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import QuestionAnswerOutlinedIcon from '@mui/icons-material/QuestionAnswerOutlined';
-import { marked } from 'marked';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import { useLibraryStore } from '../store/libraryStore';
 import { PromptEditor } from '../components/PromptEditor';
@@ -61,33 +60,6 @@ async function loadPdfjs() {
 }
 
 const KIND_LABEL: Record<string, string> = { selected: '选中总结', full: '全文总结' };
-
-/** AI 问答回答的 Markdown 渲染（marked → HTML，窄栏友好样式）。 */
-function MarkdownAnswer({ text }: { text: string }) {
-  const html = useMemo(() => marked.parse(text, { async: false }) as string, [text]);
-  return (
-    <Box
-      component="div"
-      dangerouslySetInnerHTML={{ __html: html }}
-      sx={{
-        fontSize: 12.5,
-        lineHeight: 1.55,
-        wordBreak: 'break-word',
-        '& p': { my: 0.5 },
-        '& ul, & ol': { my: 0.5, pl: 2.5 },
-        '& li': { my: 0.2 },
-        '& pre': { my: 0.5, p: 0.75, borderRadius: 1, bgcolor: 'action.hover', overflow: 'auto', fontSize: 11.5, whiteSpace: 'pre-wrap' },
-        '& code': { bgcolor: 'action.hover', borderRadius: 0.5, px: 0.4, fontFamily: 'monospace' },
-        '& pre code': { bgcolor: 'transparent', p: 0 },
-        '& table': { borderCollapse: 'collapse', my: 0.5, '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.3 } },
-        '& h1, & h2, & h3, & h4': { fontSize: 'inherit', fontWeight: 600, my: 0.75 },
-        '& blockquote': { my: 0.5, pl: 1, borderLeft: '3px solid', borderColor: 'divider', color: 'text.secondary' },
-        '& a': { color: 'primary.main' },
-        '& img': { maxWidth: '100%', borderRadius: 1 },
-      }}
-    />
-  );
-}
 
 /** 提取论文含图页（operatorList 含图片绘制指令的页）为 PNG dataURL，供总结图文并茂。 */
 async function extractFigureImages(
@@ -214,8 +186,8 @@ export function ReaderPage({
   const [editingNote, setEditingNote] = useState<NoteRecord | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editColor, setEditColor] = useState<string>(NOTE_COLORS[0]);
-  // 基于全文/高亮的 AI 问答（流式回答）
-  const [qaItems, setQaItems] = useState<Array<{ id: string; question: string; answer: string; error: string | null; busy: boolean }>>([]);
+  // 基于全文/高亮的 AI 问答（回答生成 Markdown 文件，边框只给链接，点击弹窗查看）
+  const [qaItems, setQaItems] = useState<Array<{ id: string; question: string; mdPath: string | null; error: string | null; busy: boolean }>>([]);
   const [qaInput, setQaInput] = useState('');
   // 问答上下文来源：full=全文；selection=选中的高亮文本
   const [qaContext, setQaContext] = useState<'full' | 'selection'>('full');
@@ -229,14 +201,21 @@ export function ReaderPage({
         const idx = items.findIndex((it) => it.id === evt.id);
         if (idx < 0) return items;
         const next = [...items];
-        if (evt.kind === 'delta') next[idx] = { ...next[idx], answer: next[idx].answer + evt.text };
-        else if (evt.kind === 'done') next[idx] = { ...next[idx], busy: false };
+        if (evt.kind === 'done') next[idx] = { ...next[idx], busy: false, mdPath: evt.mdPath };
         else if (evt.kind === 'error') next[idx] = { ...next[idx], busy: false, error: evt.message };
         return next;
       });
     });
     return off;
   }, []);
+
+  const openQaMd = (mdPath: string) => {
+    void window.paper.invoke('markdown:open', { path: mdPath }).then((r) => {
+      // Web 版返回可访问 URL（服务端已渲染 HTML）；Electron 版自带窗口，无 url。
+      const url = (r as { url?: string } | undefined)?.url;
+      if (url) window.open(url, '_blank', 'noopener');
+    });
+  };
 
   const askQa = async () => {
     const q = qaInput.trim();
@@ -245,11 +224,16 @@ export function ReaderPage({
     if (!contextText.trim()) return;
     setQaInput('');
     try {
-      const { id } = await window.paper.invoke('qa:run', { paperTitle: title || '未知论文', fullText: contextText, question: q });
-      setQaItems((items) => [...items, { id, question: q, answer: '', error: null, busy: true }]);
+      const { id } = await window.paper.invoke('qa:run', {
+        paperId: paperId ?? 'unknown',
+        paperTitle: title || '未知论文',
+        fullText: contextText,
+        question: q,
+      });
+      setQaItems((items) => [...items, { id, question: q, mdPath: null, error: null, busy: true }]);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setQaItems((items) => [...items, { id: `err-${Date.now()}`, question: q, answer: '', error: message, busy: false }]);
+      setQaItems((items) => [...items, { id: `err-${Date.now()}`, question: q, mdPath: null, error: message, busy: false }]);
     }
   };
 
@@ -862,14 +846,20 @@ export function ReaderPage({
                 {it.busy && (
                   <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                     <CircularProgress size={10} />
-                    <Typography variant="caption" color="text.secondary">回答中…</Typography>
+                    <Typography variant="caption" color="text.secondary">回答生成中…</Typography>
                   </Stack>
                 )}
                 {it.error && <Alert severity="error" sx={{ mt: 0.5 }}>{it.error}</Alert>}
-                {it.answer && (
-                  <Box sx={{ mt: 0.5 }}>
-                    <MarkdownAnswer text={it.answer} />
-                  </Box>
+                {!it.busy && !it.error && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<OpenInNewIcon />}
+                    sx={{ mt: 0.5 }}
+                    onClick={() => it.mdPath && openQaMd(it.mdPath)}
+                  >
+                    打开 Markdown
+                  </Button>
                 )}
               </Box>
             ))}
