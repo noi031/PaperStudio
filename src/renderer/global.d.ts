@@ -1,5 +1,5 @@
 // 渲染进程全局声明：window.paper 桥（由 webBridge.ts 安装，HTTP RPC + SSE）。
-import type { IpcContract, PapersEvent, SummaryEvent } from '../shared/types';
+import type { IpcContract, PapersEvent, QaEvent, SummaryEvent } from '../shared/types';
 
 declare global {
   interface Window {
@@ -13,6 +13,8 @@ declare global {
       onSearchEvent: (listener: (payload: { stage: 'plan' | 'searching' | 'scoring' }) => void) => () => void;
       /** PDF 后台下载的进度/结果事件（papers:event）。 */
       onPapersEvent: (listener: (payload: PapersEvent) => void) => () => void;
+      /** 阅读器 AI 问答的流式回答（qa:event）。 */
+      onQaEvent: (listener: (payload: QaEvent) => void) => () => void;
     };
   }
 }

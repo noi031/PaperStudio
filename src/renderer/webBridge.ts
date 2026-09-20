@@ -19,6 +19,7 @@ interface PaperBridge {
   onSummaryEvent: (listener: (payload: unknown) => void) => () => void;
   onSearchEvent: (listener: (payload: unknown) => void) => () => void;
   onPapersEvent: (listener: (payload: PapersEvent) => void) => () => void;
+  onQaEvent: (listener: (payload: unknown) => void) => () => void;
 }
 
 /** RPC 响应体：网关异常时可能不是 JSON（如 502 的 "Bad Gateway "）。 */
@@ -147,5 +148,6 @@ export function installWebBridge(): void {
     onSummaryEvent: subscribe('summary:event'),
     onSearchEvent: subscribe('search:event'),
     onPapersEvent: subscribe('papers:event') as PaperBridge['onPapersEvent'],
+    onQaEvent: subscribe('qa:event'),
   };
 }

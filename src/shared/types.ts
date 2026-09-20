@@ -97,6 +97,7 @@ export type IpcChannel =
   | 'reader:open'
   | 'summaries:list'
   | 'summary:run'
+  | 'qa:run'
   | 'notes:list'
   | 'notes:add'
   | 'notes:update'
@@ -178,6 +179,10 @@ export interface IpcContract {
   'summaries:list': { req: { paperId: string }; res: SummaryRecord[] };
   'summary:run': {
     req: { paperId: string; kind: SummaryKind; text: string; images?: Array<{ page: number; dataUrl: string }> };
+    res: { id: string };
+  };
+  'qa:run': {
+    req: { paperTitle: string; fullText: string; question: string };
     res: { id: string };
   };
   'markdown:open': { req: { path: string }; res: { ok: boolean; message?: string; url?: string } };
@@ -293,6 +298,12 @@ export interface SummaryRecord {
 
 /** summary:event 推送负载（渲染层 window.paper.onSummaryEvent 订阅）。 */
 export type SummaryEvent =
+  | { id: string; kind: 'delta'; text: string }
+  | { id: string; kind: 'done' }
+  | { id: string; kind: 'error'; message: string };
+
+/** qa:event 推送负载（阅读器 AI 问答流式回答，渲染层 window.paper.onQaEvent 订阅）。 */
+export type QaEvent =
   | { id: string; kind: 'delta'; text: string }
   | { id: string; kind: 'done' }
   | { id: string; kind: 'error'; message: string };

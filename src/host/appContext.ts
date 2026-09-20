@@ -20,6 +20,7 @@ import { PdfService, resolveStorageDir } from '../main/pdfService.js';
 import { PresentationRepo } from '../main/presentationRepo.js';
 import { SummaryRepo } from '../main/summaryRepo.js';
 import { SummaryService } from '../main/summaryService.js';
+import { QaService } from '../main/qaService.js';
 import { backendLabel, resolveBackend } from '../main/backend.js';
 import type { HostEmit, IpcDeps } from '../main/ipc.js';
 
@@ -106,6 +107,7 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
       summaries.replace(paperId, kind, content, model, mdPath);
     },
   });
+  const qa = new QaService({ getSettings: () => db.getSettings(), emit: opts.emit });
 
   const deps: IpcDeps = {
     emit: opts.emit,
@@ -115,6 +117,7 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
     pdf: new PdfService(storageDir),
     summaries,
     summary,
+    qa,
     directions: new DirectionRepo(db.raw),
     drafts: new DraftRepo(db.raw),
     presentations: new PresentationRepo(db.raw),

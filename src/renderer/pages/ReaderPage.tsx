@@ -186,6 +186,38 @@ export function ReaderPage({
   const [editingNote, setEditingNote] = useState<NoteRecord | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editColor, setEditColor] = useState<string>(NOTE_COLORS[0]);
+  // 基于全文的 AI 问答（流式回答）
+  const [qaItems, setQaItems] = useState<Array<{ id: string; question: string; answer: string; error: string | null; busy: boolean }>>([]);
+  const [qaInput, setQaInput] = useState('');
+
+  useEffect(() => {
+    const off = window.paper.onQaEvent((evt) => {
+      if (!evt || typeof evt.id !== 'string') return;
+      setQaItems((items) => {
+        const idx = items.findIndex((it) => it.id === evt.id);
+        if (idx < 0) return items;
+        const next = [...items];
+        if (evt.kind === 'delta') next[idx] = { ...next[idx], answer: next[idx].answer + evt.text };
+        else if (evt.kind === 'done') next[idx] = { ...next[idx], busy: false };
+        else if (evt.kind === 'error') next[idx] = { ...next[idx], busy: false, error: evt.message };
+        return next;
+      });
+    });
+    return off;
+  }, []);
+
+  const askQa = async () => {
+    const q = qaInput.trim();
+    if (!q || qaItems.some((it) => it.busy) || !fullText.trim()) return;
+    setQaInput('');
+    try {
+      const { id } = await window.paper.invoke('qa:run', { paperTitle: title || '未知论文', fullText, question: q });
+      setQaItems((items) => [...items, { id, question: q, answer: '', error: null, busy: true }]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setQaItems((items) => [...items, { id: `err-${Date.now()}`, question: q, answer: '', error: message, busy: false }]);
+    }
+  };
 
   const docRef = useRef<{ doc: import('pdfjs-dist').PDFDocumentProxy; data: Uint8Array } | null>(null);
 
@@ -756,6 +788,48 @@ export function ReaderPage({
 
       <Box sx={{ width: 320, flexShrink: 0, overflow: 'auto', maxHeight: '88vh' }}>
         <Stack spacing={1} sx={{ p: 1 }}>
+          {/* 基于文章内容的 AI 问答 */}
+          <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1 }}>
+            <Typography variant="subtitle2" sx={{ fontSize: 12, mb: 0.5 }}>AI 问答（基于全文）</Typography>
+            <Stack direction="row" spacing={0.8}>
+              <TextField
+                size="small"
+                fullWidth
+                placeholder={fullText.trim() ? '就论文内容提问，如：本文的主要方法是什么？' : '全文提取完成后才能提问'}
+                value={qaInput}
+                onChange={(e) => setQaInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) void askQa();
+                }}
+                multiline
+                maxRows={3}
+                disabled={qaItems.some((it) => it.busy) || !fullText.trim()}
+              />
+              <Button size="small" variant="contained" disabled={qaItems.some((it) => it.busy) || !qaInput.trim() || !fullText.trim()} onClick={() => void askQa()}>
+                提问
+              </Button>
+            </Stack>
+            {qaItems.map((it) => (
+              <Box key={it.id} sx={{ mt: 1 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  Q：{it.question}
+                </Typography>
+                {it.busy && (
+                  <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                    <CircularProgress size={10} />
+                    <Typography variant="caption" color="text.secondary">回答中…</Typography>
+                  </Stack>
+                )}
+                {it.error && <Alert severity="error" sx={{ mt: 0.5 }}>{it.error}</Alert>}
+                {it.answer && (
+                  <Typography variant="caption" sx={{ display: 'block', whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.5 }}>
+                    {it.answer}
+                  </Typography>
+                )}
+              </Box>
+            ))}
+          </Box>
+
           <Typography variant="h6">AI 总结</Typography>
           <Button
             variant="contained"

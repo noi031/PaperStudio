@@ -9,6 +9,7 @@ import type { PaperRepo } from './paperRepo';
 import type { PdfService } from './pdfService';
 import type { SummaryRepo } from './summaryRepo';
 import type { SummaryService } from './summaryService';
+import type { QaService } from './qaService';
 import type { SummaryKind } from '../shared/types.js';
 import type { DirectionRepo } from './directionRepo';
 import type { DraftRepo } from './draftRepo';
@@ -40,6 +41,7 @@ export interface IpcDeps {
   pdf: PdfService;
   summaries: SummaryRepo;
   summary: SummaryService;
+  qa: QaService;
   directions: DirectionRepo;
   drafts: DraftRepo;
   presentations: PresentationRepo;
@@ -70,7 +72,7 @@ function toMessageLite(m: {
 export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
   // 正在后台下载 PDF 的论文（同一个 id 只跑一个任务；记录 AbortController 用于停止）。
   const pdfJobs = new Map<string, { controller: AbortController }>();
-  const { db, agent, papers, pdf, summaries, summary, directions, drafts, presentations, notes, getSettings, storageDir, exportDir, markdownDir } = deps;
+  const { db, agent, papers, pdf, summaries, summary, qa, directions, drafts, presentations, notes, getSettings, storageDir, exportDir, markdownDir } = deps;
 
   ipc.handle('settings:get', () => db.getSettings());
   ipc.handle('settings:save', (patch: Partial<PaperSettings>) => db.saveSettings(patch));
@@ -418,6 +420,12 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
       }
       return summary.run(req.paperId, req.kind, req.text, p?.title ?? '未知论文', figList);
     },
+  );
+
+  // ── 阅读器 AI 问答 ────────────────────────────────────────
+  // 基于论文全文回答问题：立即返回 job id，增量经 qa:event 推送。
+  ipc.handle('qa:run', (req: { paperTitle: string; fullText: string; question: string }) =>
+    qa.run(req.paperTitle, req.fullText, req.question),
   );
 
   // ── 行内批注 ──────────────────────────────────────────────
