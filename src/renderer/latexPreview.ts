@@ -21,6 +21,11 @@ function cleanMathEnv(body: string): string {
     .trim();
 }
 
+/** KaTeX 渲染环境内容：必须包在 aligned 中（& 列对齐、\\ 换行才有合法语义）。 */
+function envBody(body: string): string {
+  return `\\begin{aligned}${cleanMathEnv(body)}\\end{aligned}`;
+}
+
 /** 命令替换表：LaTeX 命令 → HTML/Markdown（对整段源码做正则全局替换）。 */
 function applyCommands(src: string, html: boolean): string {
   const bold = html ? '<b>$1</b>' : '**$1**';
@@ -83,10 +88,10 @@ export function renderLatexHtml(src: string): string {
     blocks.push(rendered);
     return `\u0000K${blocks.length - 1}\u0000`;
   };
-  html = html.replace(MATH_ENV_INNER_RE, (_m, _env, body) => render(body, true, cleanMathEnv));
-  html = html.replace(MATH_ENV_OUTER_RE, (_m, _env, body) => render(body, true, cleanMathEnv));
-  html = html.replace(MATH_BLOCK_RE, (_m, body) => render(body, true));
-  html = html.replace(MATH_DISPLAY_BRACKET_RE, (_m, body) => render(body, true));
+  html = html.replace(MATH_ENV_INNER_RE, (_m, _e, body) => render(envBody(body), true));
+  html = html.replace(MATH_ENV_OUTER_RE, (_m, _e, body) => render(envBody(body), true));
+  html = html.replace(MATH_BLOCK_RE, (_m, body) => render(envBody(body), true));
+  html = html.replace(MATH_DISPLAY_BRACKET_RE, (_m, body) => render(envBody(body), true));
   html = html.replace(MATH_INLINE_RE, (_m, body) => render(body, false));
   html = html.replace(MATH_INLINE_PAREN_RE, (_m, body) => render(body, false));
   html = applyCommands(html, true);
@@ -101,17 +106,23 @@ export function renderLatexHtml(src: string): string {
   return paras || html;
 }
 
-/** 小节 LaTeX 源码 → Markdown（数学统一转为 $…$/$$…$$，交给服务端 KaTeX，整篇预览弹窗用）。 */
+/** 小节 LaTeX 源码 → Markdown（数学统一转为 $…$/$$…$$，交给服务端 KaTeX，整篇预览弹窗用）。
+ *  与 renderLatexHtml 一致：数学内容先占位保护，命令转换后再还原，避免 \sigma 等被剥掉。 */
 export function latexToMarkdown(src: string): string {
   let md = src;
-  const envToBlock = (re: RegExp): void => {
-    md = md.replace(re, (_m, _env: string, body: string) => `$$\n${cleanMathEnv(body)}\n$$`);
+  const blocks: string[] = [];
+  const pick = (raw: string): string => {
+    blocks.push(raw);
+    return `\u0000M${blocks.length - 1}\u0000`;
   };
-  envToBlock(MATH_ENV_INNER_RE);
-  envToBlock(MATH_ENV_OUTER_RE);
-  md = md.replace(MATH_DISPLAY_BRACKET_RE, '$$\n$1\n$$');
-  md = md.replace(MATH_INLINE_PAREN_RE, '$$1$$');
+  md = md.replace(MATH_ENV_INNER_RE, (_m, _e, body) => pick(`$$\n${envBody(body)}\n$$`));
+  md = md.replace(MATH_ENV_OUTER_RE, (_m, _e, body) => pick(`$$\n${envBody(body)}\n$$`));
+  md = md.replace(MATH_BLOCK_RE, (_m, body) => pick(`$$\n${envBody(body)}\n$$`));
+  md = md.replace(MATH_DISPLAY_BRACKET_RE, (_m, body) => pick(`$$\n${envBody(body)}\n$$`));
+  md = md.replace(MATH_INLINE_RE, (_m, body) => pick(`$${cleanMathEnv(body)}$`));
+  md = md.replace(MATH_INLINE_PAREN_RE, (_m, body) => pick(`$${cleanMathEnv(body)}$`));
   md = applyCommands(md, false);
+  md = md.replace(/\u0000M(\d+)\u0000/g, (_m, i: string) => blocks[Number(i)] ?? '');
   return md.replace(/\n{3,}/g, '\n\n').trim();
 }
 
