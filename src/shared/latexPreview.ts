@@ -1,8 +1,8 @@
-// 写作页 LaTeX 源码预览：
+// 写作页 LaTeX 源码预览（host 与 renderer 共用同一份渲染逻辑，保证逐节预览与全文预览结果一致）：
 //  - renderLatexHtml：小节内容 → HTML（$...$ 数学用 KaTeX 渲染，常用命令轻量转换）
-//  - latexToMarkdown：小节内容 → Markdown（数学 $...$ 保留，交给服务端 KaTeX，用于整篇预览弹窗）
+//  - latexToMarkdown：小节内容 → Markdown（数学 $...$ 保留，交给服务端 KaTeX）
+// 注意：不要在这里 import CSS（host 端 Node 编译无法加载 .css）；renderer 侧自行引入 katex css。
 import katex from 'katex';
-import 'katex/dist/katex.min.css';
 
 const MATH_BLOCK_RE = /\$\$([\s\S]+?)\$\$/g;
 const MATH_INLINE_RE = /\$([^$\n]+?)\$/g;
@@ -69,6 +69,8 @@ function applyCommands(src: string, html: boolean): string {
   // 常见转义还原
   out = out.replace(/\\%/g, '%').replace(/\\&/g, '&').replace(/\\_/g, '_').replace(/\\#/g, '#');
   out = out.replace(/\\textasciitilde/g, '~');
+  // LaTeX 的 ~~ 只是双空格，不是删除线（Markdown 里 ~~…~~ 是删除线语法，会画出划线）
+  out = out.replace(/~~/g, ' ');
   // 剩下的未知命令：若带 {…} 保留参数、去掉命令；无参数命令直接去掉
   out = out.replace(/\\([a-zA-Z]+)\{([^{}]*)\}/g, '$2');
   out = out.replace(/\\([a-zA-Z]+)(?![a-zA-Z])/g, '');
@@ -106,7 +108,7 @@ export function renderLatexHtml(src: string): string {
   return paras || html;
 }
 
-/** 小节 LaTeX 源码 → Markdown（数学统一转为 $…$/$$…$$，交给服务端 KaTeX，整篇预览弹窗用）。
+/** 小节 LaTeX 源码 → Markdown（数学统一转为 $…$/$$…$$，交给服务端 KaTeX）。
  *  与 renderLatexHtml 一致：数学内容先占位保护，命令转换后再还原，避免 \sigma 等被剥掉。 */
 export function latexToMarkdown(src: string): string {
   let md = src;

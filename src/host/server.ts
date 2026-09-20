@@ -16,6 +16,7 @@ import path from 'node:path';
 import { createAppContext, type AppContext } from './appContext.js';
 import { registerIpc, type HandlerRegistrar } from '../main/ipc.js';
 import type { HostEmit } from '../main/ipc.js';
+import { renderLatexHtml, latexHeadingToText } from '../shared/latexPreview.js';
 
 const MAX_BODY_BYTES = 256 * 1024 * 1024;
 const BIN_KEY = '__paperstudioBin';
@@ -206,6 +207,43 @@ function ensureKatexFonts(appRoot: string, markdownDir: string): void {
   }
 }
 
+/** 组装预览弹窗完整 HTML 页（KaTeX css/字体 URL 已内联重写）。 */
+function buildDocPage(bodyHtml: string, title: string, markdownDir: string): string {
+  const appRoot = path.resolve(__dirname, '..', '..', '..');
+  ensureKatexFonts(appRoot, markdownDir);
+  const katexCss = getKatexCss(appRoot);
+  return `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; base-uri 'none'">
+<title>${title}</title>
+<style>
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 0 auto; padding: 32px 40px 80px; color: #1f2328; line-height: 1.7; }
+  h1 { font-size: 24px; border-bottom: 1px solid #d0d7de; padding-bottom: 8px; }
+  h2 { font-size: 19px; margin-top: 28px; border-bottom: 1px solid #eaeef2; padding-bottom: 4px; }
+  h3 { font-size: 16px; } h4 { font-size: 14px; }
+  p { margin: 8px 0; } .sec-desc { color: #57606a; font-size: 13px; }
+  pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; }
+  code { background: #f6f8fa; padding: 2px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 13px; }
+  pre code { background: none; padding: 0; } blockquote { color: #57606a; border-left: 4px solid #d0d7de; margin-left: 0; padding-left: 12px; }
+  table { border-collapse: collapse; } th, td { border: 1px solid #d0d7de; padding: 6px 10px; }
+  img { max-width: 100%; height: auto; border: 1px solid #eaeef2; border-radius: 4px; }
+  a { color: #0969da; } ul, ol { padding-left: 22px; }
+  .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+  .cite { color: #0969da; font-weight: 600; }
+  ${katexCss}
+</style></head>
+<body>${bodyHtml}</body></html>`;
+}
+
+/** HTML 转义（纯文本标题/描述用）。 */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /** 注册 marked 的 $...$ / $$...$$ 公式扩展（模块级只注册一次）。 */
 async function registerMathExtensions(): Promise<void> {
   if (mathExtensionsRegistered) return;
@@ -299,26 +337,7 @@ function registerWebChannels(ctx: AppContext): void {
     const { marked } = await dynamicImport('marked');
     // 公式渲染：$...$ 行内 / $$...$$ 块级（KaTeX），字体文件保证可访问。
     await registerMathExtensions();
-    const appRoot = path.resolve(__dirname, '..', '..', '..');
-    ensureKatexFonts(appRoot, ctx.markdownDir);
-    const katexCss = getKatexCss(appRoot);
-    const html = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; base-uri 'none'">
-<title>${path.basename(file)}</title>
-<style>
-  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 0 auto; padding: 32px 40px 80px; color: #1f2328; line-height: 1.7; }
-  h1 { font-size: 24px; border-bottom: 1px solid #d0d7de; padding-bottom: 8px; }
-  h2 { font-size: 19px; margin-top: 28px; border-bottom: 1px solid #eaeef2; padding-bottom: 4px; }
-  h3 { font-size: 16px; } pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; }
-  code { background: #f6f8fa; padding: 2px 5px; border-radius: 4px; font-family: Consolas, monospace; font-size: 13px; }
-  pre code { background: none; padding: 0; } blockquote { color: #57606a; border-left: 4px solid #d0d7de; margin-left: 0; padding-left: 12px; }
-  table { border-collapse: collapse; } th, td { border: 1px solid #d0d7de; padding: 6px 10px; }
-  img { max-width: 100%; height: auto; border: 1px solid #eaeef2; border-radius: 4px; }
-  a { color: #0969da; } ul, ol { padding-left: 22px; }
-  ${katexCss}
-</style></head>
-<body>${marked.parse(renderBareMath(content))}</body></html>`;
+    const html = buildDocPage(marked.parse(renderBareMath(content)), path.basename(file), ctx.markdownDir);
     const htmlFile = path.join(ctx.markdownDir, outName);
     fs.writeFileSync(htmlFile, html, 'utf8');
     return `/files/markdown/${encodeURIComponent(path.basename(htmlFile))}`;
@@ -351,6 +370,37 @@ function registerWebChannels(ctx: AppContext): void {
       fs.writeFileSync(file, String(content ?? ''), 'utf8');
       const url = await renderMarkdownFile(file, `${safeName}-${Date.now()}.html`);
       return { ok: true, url };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // 全文预览：与逐节预览共用 renderLatexHtml（同一渲染函数，结果必然一致），
+  // 渲染层只传结构化内容（标题 + 各节 LaTeX 源码），服务端逐节渲染后拼成完整 HTML。
+  registrar.handle('preview:latex', async (req: unknown) => {
+    try {
+      const { name, title, sections } = (req ?? {}) as {
+        name?: unknown;
+        title?: unknown;
+        sections?: Array<{ heading?: unknown; description?: unknown; content?: unknown }>;
+      };
+      const safeName =
+        String(name ?? 'preview').replace(/[^\w\u4e00-\u9fa5.-]+/g, '_').slice(0, 48) || 'preview';
+      const parts: string[] = [];
+      const docTitle = latexHeadingToText(String(title ?? '论文草稿'));
+      if (docTitle) parts.push(`<h1>${escapeHtml(docTitle)}</h1>`);
+      (Array.isArray(sections) ? sections : []).forEach((s, i) => {
+        const heading = latexHeadingToText(String(s?.heading ?? `第 ${i + 1} 节`));
+        const desc = latexHeadingToText(String(s?.description ?? ''));
+        parts.push(`<h2>${escapeHtml(heading)}</h2>`);
+        if (desc) parts.push(`<p class="sec-desc">${escapeHtml(desc)}</p>`);
+        parts.push(renderLatexHtml(String(s?.content ?? '')));
+      });
+      const dir = path.join(ctx.markdownDir, 'preview');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${safeName}-${Date.now()}.html`);
+      fs.writeFileSync(file, buildDocPage(parts.join('\n'), docTitle || '论文草稿', ctx.markdownDir), 'utf8');
+      return { ok: true, url: `/files/markdown/preview/${encodeURIComponent(path.basename(file))}` };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }

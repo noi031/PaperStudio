@@ -118,6 +118,7 @@ export type IpcChannel =
   | 'drafts:export'
   | 'markdown:open'
   | 'markdown:preview'
+  | 'preview:latex'
   | 'presentations:list'
   | 'presentations:create'
   | 'presentations:generateSlides'
@@ -193,6 +194,15 @@ export interface IpcContract {
   // 写作整篇预览：渲染层给 Markdown 内容，服务端渲染 HTML 后返回可访问 URL。
   'markdown:preview': {
     req: { name: string; content: string };
+    res: { ok: boolean; message?: string; url?: string };
+  };
+  // 全文预览（与逐节预览同一渲染函数）：渲染层给结构化 LaTeX 内容，服务端 renderLatexHtml 逐节渲染拼接。
+  'preview:latex': {
+    req: {
+      name: string;
+      title?: string;
+      sections?: Array<{ heading?: string; description?: string; content?: string }>;
+    };
     res: { ok: boolean; message?: string; url?: string };
   };
   // ── 行内批注 ──

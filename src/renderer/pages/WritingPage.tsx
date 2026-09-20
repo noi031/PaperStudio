@@ -34,7 +34,8 @@ import { useWritingStore } from '../store/writingStore';
 import { PromptEditor } from '../components/PromptEditor';
 import { SearchablePaperSelect, filterPapers } from '../components/PaperSelect';
 import { latexToText } from '../../shared/latex';
-import { renderLatexHtml, latexToMarkdown, latexHeadingToText } from '../latexPreview';
+import { renderLatexHtml, latexHeadingToText } from '../../shared/latexPreview';
+import 'katex/dist/katex.min.css';
 import Link from '@mui/material/Link';
 import { downloadUrlOf, fileNameOf } from '../fileLink';
 import type { DraftRecord } from '../../shared/types';
@@ -172,24 +173,19 @@ export function WritingPage() {
     }
   };
 
-  const handlePreviewFull = async () => {    if (!current) return;
-    const lines: string[] = [];
-    lines.push(`# ${latexHeadingToText(current.title) || '论文草稿'}`);
-    lines.push('');
-    current.outline.forEach((item, i) => {
-      const section = current.sections[i];
-      const heading = latexHeadingToText(item.heading) || `第 ${i + 1} 节`;
-      lines.push(`## ${heading}`);
-      if (item.description) lines.push(`> ${latexHeadingToText(item.description)}`);
-      lines.push('');
-      if (section?.content) {
-        lines.push(latexToMarkdown(section.content));
-        lines.push('');
-      }
-    });
-    const content = lines.join('\n');
+  const handlePreviewFull = async () => {
+    if (!current) return;
+    // 传给服务端结构与各节 LaTeX 源码；服务端与逐节预览共用同一 renderLatexHtml 渲染，结果一致
     try {
-      const res = await window.paper.invoke('markdown:preview', { name: `draft-${current.id.slice(0, 8)}`, content });
+      const res = await window.paper.invoke('preview:latex', {
+        name: `draft-${current.id.slice(0, 8)}`,
+        title: current.title,
+        sections: current.outline.map((item, i) => ({
+          heading: item.heading,
+          description: item.description ?? '',
+          content: localDrafts[`${current.id}:${i}`] ?? current.sections[i]?.content ?? '',
+        })),
+      });
       const url = (res as { url?: string } | undefined)?.url;
       if (url) window.open(url, '_blank', 'noopener');
       else setError('预览生成失败');
