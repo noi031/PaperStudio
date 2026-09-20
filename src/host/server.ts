@@ -251,6 +251,45 @@ async function registerMathExtensions(): Promise<void> {
   mathExtensionsRegistered = true;
 }
 
+/** Unicode 数学符号 → LaTeX 命令（裸公式兜底渲染用）。 */
+const MATH_SYMBOL_MAP: Record<string, string> = {
+  ℓ: '\\ell', σ: '\\sigma', Σ: '\\sum', θ: '\\theta', γ: '\\gamma', ν: '\\nu', λ: '\\lambda',
+  α: '\\alpha', β: '\\beta', π: '\\pi', μ: '\\mu', δ: '\\delta', ε: '\\epsilon', η: '\\eta',
+  κ: '\\kappa', τ: '\\tau', φ: '\\phi', ω: '\\omega', Ω: '\\Omega', Δ: '\\Delta',
+  '∞': '\\infty', '√': '\\sqrt', '∫': '\\int', '≤': '\\le', '≥': '\\ge', '≠': '\\ne',
+  '±': '\\pm', '×': '\\times', '·': '\\cdot',
+  '∈': '\\in', '⇒': '\\Rightarrow', '→': '\\to', '∇': '\\nabla', '≈': '\\approx',
+};
+
+const MATH_CHARS_RE = /[ℓσΣθηλγαβπμνδεηκτφωΩΔ∞√∫≤≥≠±×·∈⇒→∇≈]/;
+
+/** 裸公式行兜底：LLM 未用 $ 包裹的独立公式行（无中文、含数学符号/下标）→ KaTeX 渲染；失败回退原文。 */
+function renderBareMath(content: string): string {
+  return content
+    .split('\n')
+    .map((line) => {
+      const t = line.trim();
+      if (!t || t.includes('$') || /[\u4e00-\u9fa5]/.test(t)) return line; // 已包裹/含中文 → 不动
+      const symbols = (t.match(MATH_CHARS_RE) ?? []).length;
+      const hasSub = /[A-Za-zℓσΣθηλγν]_/.test(t);
+      const looksLikeEq = /^[A-Za-zℓLfghEy]\s*[=:]/.test(t);
+      const isFormula = (symbols >= 1 && (hasSub || looksLikeEq)) || symbols >= 3;
+      if (!isFormula) return line;
+      let tex = t;
+      for (const [u, cmd] of Object.entries(MATH_SYMBOL_MAP)) tex = tex.split(u).join(cmd);
+      tex = tex.replace(/([A-Za-z\\]+)_([A-Za-z0-9]+)/g, '$1_{\\text{$2}}');
+      tex = tex.replace(/\b(log|exp|cos|sin|tan|min|max|lim|arg)\(/g, '\\\\$1(');
+      try {
+        const html = katex.renderToString(tex, { displayMode: true, throwOnError: false, strict: false });
+        if (!html.includes('katex-error')) return html;
+      } catch {
+        // 渲染失败回退原文
+      }
+      return line;
+    })
+    .join('\n');
+}
+
 function registerWebChannels(ctx: AppContext): void {
   // Electron 版的 markdown:open 依赖 BrowserWindow 开新窗口；Web 版把 MD 渲染成 HTML
   // 落到 markdown/ 目录，并返回可通过 /files/markdown/ 访问的 URL（前端用 window.open 打开）。
@@ -285,7 +324,7 @@ function registerWebChannels(ctx: AppContext): void {
   a { color: #0969da; } ul, ol { padding-left: 22px; }
   ${katexCss}
 </style></head>
-<body>${marked.parse(content)}</body></html>`;
+<body>${marked.parse(renderBareMath(content))}</body></html>`;
       const htmlFile = path.join(ctx.markdownDir, `${path.basename(file, '.md')}.html`);
       fs.writeFileSync(htmlFile, html, 'utf8');
       return { ok: true, url: `/files/markdown/${encodeURIComponent(path.basename(htmlFile))}` };
