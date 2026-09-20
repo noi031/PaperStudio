@@ -86,4 +86,17 @@ export class DraftRepo {
   remove(id: string): void {
     this.db.prepare('DELETE FROM drafts WHERE id = ?').run(id);
   }
+
+  /** 原子更新单个小节内容：JSON_SET 只写指定索引，并发撰写多个小节时互不覆盖。 */
+  setSectionContent(id: string, index: number, content: string): void {
+    const cur = this.get(id);
+    const sec = cur?.sections[index];
+    if (!cur || !sec) return;
+    const updated = { ...sec, content };
+    this.db
+      .prepare(
+        "UPDATE drafts SET sections_json = JSON_SET(sections_json, '$[' || CAST(? AS INTEGER) || ']', json(?)) WHERE id = ?",
+      )
+      .run(index, JSON.stringify(updated), id);
+  }
 }

@@ -552,8 +552,9 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
     if (!paper && references.length === 0) return { ok: false, message: '草稿没有关联任何论文' };
     try {
       const content = await writeSection(getSettings(), { paper, references }, d.outline, item);
-      const sections = d.sections.map((s, i) => (i === req.index ? { ...s, content } : s));
-      const record = drafts.update(d.id, { sections });
+      // 原子更新该小节（并发撰写多个小节时互不覆盖）
+      drafts.setSectionContent(req.id, req.index, content);
+      const record = drafts.get(req.id)!;
       return { ok: true, record };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
@@ -561,10 +562,8 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
   });
 
   ipc.handle('drafts:setSection', (req: { id: string; index: number; content: string }) => {
-    const d = drafts.get(req.id);
-    if (!d) throw new Error('草稿不存在');
-    const sections = d.sections.map((s, i) => (i === req.index ? { ...s, content: req.content } : s));
-    return drafts.update(d.id, { sections });
+    drafts.setSectionContent(req.id, req.index, req.content);
+    return drafts.get(req.id)!;
   });
 
   ipc.handle('drafts:export', async (req: { id: string; format?: 'docx' | 'md' | 'tex' | 'bib' }) => {

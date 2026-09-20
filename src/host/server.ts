@@ -293,22 +293,16 @@ function renderBareMath(content: string): string {
 function registerWebChannels(ctx: AppContext): void {
   // Electron 版的 markdown:open 依赖 BrowserWindow 开新窗口；Web 版把 MD 渲染成 HTML
   // 落到 markdown/ 目录，并返回可通过 /files/markdown/ 访问的 URL（前端用 window.open 打开）。
-  registrar.handle('markdown:open', async (req: unknown) => {
-    try {
-      const rel = String((req as { path?: unknown })?.path ?? '');
-      const root = path.resolve(ctx.markdownDir);
-      const file = path.resolve(rel);
-      if (file !== root && !file.startsWith(root + path.sep)) {
-        return { ok: false, message: '仅允许打开工作目录下的 MD 文件' };
-      }
-      const content = fs.readFileSync(file, 'utf8');
-      const { marked } = await dynamicImport('marked');
-      // 公式渲染：$...$ 行内 / $$...$$ 块级（KaTeX），字体文件保证可访问。
-      await registerMathExtensions();
-      const appRoot = path.resolve(__dirname, '..', '..', '..');
-      ensureKatexFonts(appRoot, ctx.markdownDir);
-      const katexCss = getKatexCss(appRoot);
-      const html = `<!doctype html>
+  /** 把 MD 文件渲染成 HTML 落盘（markdown 区），返回可访问 URL。 */
+  const renderMarkdownFile = async (file: string, outName: string): Promise<string> => {
+    const content = fs.readFileSync(file, 'utf8');
+    const { marked } = await dynamicImport('marked');
+    // 公式渲染：$...$ 行内 / $$...$$ 块级（KaTeX），字体文件保证可访问。
+    await registerMathExtensions();
+    const appRoot = path.resolve(__dirname, '..', '..', '..');
+    ensureKatexFonts(appRoot, ctx.markdownDir);
+    const katexCss = getKatexCss(appRoot);
+    const html = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; base-uri 'none'">
 <title>${path.basename(file)}</title>
@@ -325,9 +319,38 @@ function registerWebChannels(ctx: AppContext): void {
   ${katexCss}
 </style></head>
 <body>${marked.parse(renderBareMath(content))}</body></html>`;
-      const htmlFile = path.join(ctx.markdownDir, `${path.basename(file, '.md')}.html`);
-      fs.writeFileSync(htmlFile, html, 'utf8');
-      return { ok: true, url: `/files/markdown/${encodeURIComponent(path.basename(htmlFile))}` };
+    const htmlFile = path.join(ctx.markdownDir, outName);
+    fs.writeFileSync(htmlFile, html, 'utf8');
+    return `/files/markdown/${encodeURIComponent(path.basename(htmlFile))}`;
+  };
+
+  registrar.handle('markdown:open', async (req: unknown) => {
+    try {
+      const rel = String((req as { path?: unknown })?.path ?? '');
+      const root = path.resolve(ctx.markdownDir);
+      const file = path.resolve(rel);
+      if (file !== root && !file.startsWith(root + path.sep)) {
+        return { ok: false, message: '仅允许打开工作目录下的 MD 文件' };
+      }
+      const url = await renderMarkdownFile(file, `${path.basename(file, '.md')}.html`);
+      return { ok: true, url };
+    } catch (err) {
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // 写作预览：渲染层给出 Markdown 内容 → 写到 markdown/preview/ 并渲染 HTML，返回可访问 URL。
+  registrar.handle('markdown:preview', async (req: unknown) => {
+    try {
+      const { name, content } = (req ?? {}) as { name?: unknown; content?: unknown };
+      const safeName =
+        String(name ?? 'preview').replace(/[^\w\u4e00-\u9fa5.-]+/g, '_').slice(0, 48) || 'preview';
+      const dir = path.join(ctx.markdownDir, 'preview');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${safeName}-${Date.now()}.md`);
+      fs.writeFileSync(file, String(content ?? ''), 'utf8');
+      const url = await renderMarkdownFile(file, `${safeName}-${Date.now()}.html`);
+      return { ok: true, url };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }

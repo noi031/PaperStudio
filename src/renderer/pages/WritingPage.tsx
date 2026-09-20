@@ -28,6 +28,7 @@ import { useWritingStore } from '../store/writingStore';
 import { PromptEditor } from '../components/PromptEditor';
 import { SearchablePaperSelect } from '../components/PaperSelect';
 import { latexToText } from '../../shared/latex';
+import { renderLatexHtml, latexToMarkdown, latexHeadingToText } from '../latexPreview';
 import Link from '@mui/material/Link';
 import { downloadUrlOf, fileNameOf } from '../fileLink';
 import type { DraftRecord } from '../../shared/types';
@@ -39,6 +40,7 @@ export function WritingPage() {
     loading,
     busy,
     error,
+    setError,
     load,
     create,
     remove,
@@ -50,6 +52,15 @@ export function WritingPage() {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [paperId, setPaperId] = useState<string>('');
   const [refIds, setRefIds] = useState<string[]>([]);
+  // 小节预览模式：key = `${draftId}:${index}` 处于预览时显示渲染后的内容
+  const [previewKeys, setPreviewKeys] = useState<Set<string>>(new Set());
+  const togglePreview = (key: string) =>
+    setPreviewKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   // 小节编辑本地缓冲 + 防抖落库（避免每敲一个字一次 IPC/写库）
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -95,6 +106,34 @@ export function WritingPage() {
     if (!current) return;
     await flushLocalDrafts();
     await exportDraft(current.id, format);
+  };
+
+  /** 整篇预览：大纲标题 + 各小节内容 → Markdown（公式 $…$ 保留）→ 服务端渲染 HTML 弹窗。 */
+  const handlePreviewFull = async () => {
+    if (!current) return;
+    const lines: string[] = [];
+    lines.push(`# ${latexHeadingToText(current.title) || '论文草稿'}`);
+    lines.push('');
+    current.outline.forEach((item, i) => {
+      const section = current.sections[i];
+      const heading = latexHeadingToText(item.heading) || `第 ${i + 1} 节`;
+      lines.push(`## ${heading}`);
+      if (item.description) lines.push(`> ${latexHeadingToText(item.description)}`);
+      lines.push('');
+      if (section?.content) {
+        lines.push(latexToMarkdown(section.content));
+        lines.push('');
+      }
+    });
+    const content = lines.join('\n');
+    try {
+      const res = await window.paper.invoke('markdown:preview', { name: `draft-${current.id.slice(0, 8)}`, content });
+      const url = (res as { url?: string } | undefined)?.url;
+      if (url) window.open(url, '_blank', 'noopener');
+      else setError('预览生成失败');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const current: DraftRecord | null = drafts.find((d) => d.id === currentId) ?? null;
@@ -224,6 +263,15 @@ export function WritingPage() {
                 >
                   导出 TEX
                 </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  color="secondary"
+                  disabled={current.outline.length === 0}
+                  onClick={() => void handlePreviewFull()}
+                >
+                  预览全文
+                </Button>
               </Stack>
               <PromptEditor settingKey="promptOutline" label="生成大纲" hint="「生成大纲」使用的 AI 提示词" />
               <PromptEditor settingKey="promptSection" label="撰写小节" hint="「AI 撰写 / AI 重写」使用的 AI 提示词" />
@@ -258,6 +306,7 @@ export function WritingPage() {
                     const section = current.sections[i];
                     // 并发撰写：每个小节独立判断自己的撰写状态，互不禁用
                     const writingThis = busy.sectionsWriting.includes(`${current.id}:${i}`);
+                    const previewing = previewKeys.has(`${current.id}:${i}`);
                     return (
                       <Box key={i} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
                         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
@@ -269,6 +318,15 @@ export function WritingPage() {
                             {latexToText(item.heading) || item.heading}
                           </Typography>
                           <Box sx={{ flexGrow: 1 }} />
+                          <Button
+                            size="small"
+                            variant={previewing ? 'contained' : 'outlined'}
+                            color="secondary"
+                            disabled={writingThis || (!section?.content && !localDrafts[`${current.id}:${i}`])}
+                            onClick={() => togglePreview(`${current.id}:${i}`)}
+                          >
+                            {previewing ? '编辑' : '预览'}
+                          </Button>
                           <Button
                             size="small"
                             variant="outlined"
@@ -284,16 +342,35 @@ export function WritingPage() {
                             大纲说明：{latexToText(item.description) || item.description}
                           </Typography>
                         )}
-                        <TextField
-                          fullWidth
-                          multiline
-                          minRows={4}
-                          size="small"
-                          sx={{ mt: 1, '& .MuiInputBase-root': { fontFamily: 'Consolas, monospace', fontSize: 13 } }}
-                          placeholder={'（未撰写）点击「AI 撰写」生成 LaTeX 源码，或直接在此手动编写（如 $\\gamma$、\\textbf{…}）'}
-                          value={localDrafts[`${current.id}:${i}`] ?? section?.content ?? ''}
-                          onChange={(e) => handleSectionChange(current.id, i, e.target.value)}
-                        />
+                        {previewing ? (
+                          <Box
+                            component="div"
+                            dangerouslySetInnerHTML={{
+                              __html:
+                                renderLatexHtml(localDrafts[`${current.id}:${i}`] ?? section?.content ?? '') ||
+                                '<span style="color:#999">（空）</span>',
+                            }}
+                            sx={{
+                              mt: 1,
+                              border: '1px dashed',
+                              borderColor: 'divider',
+                              borderRadius: 1,
+                              p: 1.5,
+                              '& .katex-display': { overflowX: 'auto', overflowY: 'hidden' },
+                            }}
+                          />
+                        ) : (
+                          <TextField
+                            fullWidth
+                            multiline
+                            minRows={4}
+                            size="small"
+                            sx={{ mt: 1, '& .MuiInputBase-root': { fontFamily: 'Consolas, monospace', fontSize: 13 } }}
+                            placeholder={'（未撰写）点击「AI 撰写」生成 LaTeX 源码，或直接在此手动编写（如 $\\gamma$、\\textbf{…}）'}
+                            value={localDrafts[`${current.id}:${i}`] ?? section?.content ?? ''}
+                            onChange={(e) => handleSectionChange(current.id, i, e.target.value)}
+                          />
+                        )}
                       </Box>
                     );
                   })}

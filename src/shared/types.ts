@@ -114,6 +114,8 @@ export type IpcChannel =
   | 'drafts:writeSection'
   | 'drafts:setSection'
   | 'drafts:export'
+  | 'markdown:open'
+  | 'markdown:preview'
   | 'presentations:list'
   | 'presentations:create'
   | 'presentations:generateSlides'
@@ -186,6 +188,11 @@ export interface IpcContract {
     res: { id: string };
   };
   'markdown:open': { req: { path: string }; res: { ok: boolean; message?: string; url?: string } };
+  // 写作整篇预览：渲染层给 Markdown 内容，服务端渲染 HTML 后返回可访问 URL。
+  'markdown:preview': {
+    req: { name: string; content: string };
+    res: { ok: boolean; message?: string; url?: string };
+  };
   // ── 行内批注 ──
   'notes:list': { req: { paperId: string }; res: NoteRecord[] };
   'notes:add': {

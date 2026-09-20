@@ -15,6 +15,7 @@ interface WritingStore {
   writeSection: (id: string, index: number) => Promise<boolean>;
   setSection: (id: string, index: number, content: string) => Promise<void>;
   export: (id: string, format?: 'docx' | 'md' | 'tex' | 'bib') => Promise<string | null>;
+  setError: (message: string | null) => void;
 }
 
 export const useWritingStore = create<WritingStore>((set, get) => ({
@@ -32,6 +33,8 @@ export const useWritingStore = create<WritingStore>((set, get) => ({
       set({ loading: false });
     }
   },
+
+  setError: (message) => set({ error: message }),
 
   create: async (paperId, title, referenceIds) => {
     const record = (await window.paper.invoke('drafts:create', { paperId, title, referenceIds: referenceIds ?? [] })) as DraftRecord;

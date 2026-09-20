@@ -1,0 +1,78 @@
+// 写作页 LaTeX 源码预览：
+//  - renderLatexHtml：小节内容 → HTML（$...$ 数学用 KaTeX 渲染，常用命令轻量转换）
+//  - latexToMarkdown：小节内容 → Markdown（数学 $...$ 保留，交给服务端 KaTeX，用于整篇预览弹窗）
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
+
+const MATH_BLOCK_RE = /\$\$([\s\S]+?)\$\$/g;
+const MATH_INLINE_RE = /\$([^$\n]+?)\$/g;
+
+/** 命令替换表：LaTeX 命令 → HTML（对整段源码做正则全局替换）。 */
+function applyCommands(src: string, html: boolean): string {
+  const bold = html ? '<b>$1</b>' : '**$1**';
+  const italic = html ? '<i>$1</i>' : '*$1*';
+  const code = html ? '<code>$1</code>' : '`$1`';
+  const cite = html ? '<span class="cite">[$1]</span>' : '[$1]';
+  let out = src;
+  // \textbf/\mathbf/\textsf/\texttt{...}
+  out = out.replace(/\\(?:textbf|mathbf|textsf|texttt)\{([^{}]*)\}/g, bold);
+  out = out.replace(/\\(?:textit|emph|textsl)\{([^{}]*)\}/g, italic);
+  out = out.replace(/\\(?:text|mathrm|operatorname)\{([^{}]*)\}/g, '$1');
+  out = out.replace(/\\cite\{([^}]*)\}/g, cite);
+  out = out.replace(/\\ref\{([^}]*)\}/g, html ? '<span class="cite">图/式 $1</span>' : '图/式 $1');
+  out = out.replace(/\\(?:label|tag)\{[^}]*\}/g, '');
+  // 无条件/参数较少的有用命令
+  out = out.replace(/\\section\*?\{([^}]*)\}/g, html ? '<h3>$1</h3>' : '### $1');
+  out = out.replace(/\\subsection\*?\{([^}]*)\}/g, html ? '<h4>$1</h4>' : '#### $1');
+  out = out.replace(/\\paragraph\{([^}]*)\}/g, html ? '<b>$1</b>' : '**$1**');
+  out = out.replace(/\\quad/g, '　');
+  out = out.replace(/\\qquad/g, '　　');
+  out = out.replace(/\\,|\\;/g, ' ');
+  // 常见转义还原
+  out = out.replace(/\\%/g, '%').replace(/\\&/g, '&').replace(/\\_/g, '_').replace(/\\#/g, '#');
+  out = out.replace(/\\textasciitilde/g, '~');
+  // 剩下的未知命令：若带 {…} 保留参数、去掉命令；无参数命令直接去掉
+  out = out.replace(/\\([a-zA-Z]+)\{([^{}]*)\}/g, '$2');
+  out = out.replace(/\\([a-zA-Z]+)(?![a-zA-Z])/g, '');
+  // 环境
+  out = html ? out.replace(/\\begin\{[^}]*\}/g, '').replace(/\\end\{[^}]*\}/g, '') : out;
+  return out;
+}
+
+/** 小节 LaTeX 源码 → HTML（数学用 KaTeX，常用命令转换）。 */
+export function renderLatexHtml(src: string): string {
+  let html = src;
+  // 块级数学（$$...$$）按顺序处理，避免与行内 $ 冲突：先换占位符
+  const blocks: string[] = [];
+  html = html.replace(MATH_BLOCK_RE, (_m, body: string) => {
+    const rendered = katex.renderToString(body, { displayMode: true, throwOnError: false, strict: false });
+    blocks.push(rendered);
+    return `\u0000K${blocks.length - 1}\u0000`;
+  });
+  html = html.replace(MATH_INLINE_RE, (_m, body: string) => {
+    const rendered = katex.renderToString(body, { displayMode: false, throwOnError: false, strict: false });
+    blocks.push(rendered);
+    return `\u0000K${blocks.length - 1}\u0000`;
+  });
+  html = applyCommands(html, true);
+  html = html.replace(/\u0000K(\d+)\u0000/g, (_m, i: string) => blocks[Number(i)] ?? '');
+  // 段落：空行分段
+  const paras = html
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`)
+    .join('');
+  return paras || html;
+}
+
+/** 小节 LaTeX 源码 → Markdown（数学 $...$ 保留给服务端 KaTeX，整篇预览弹窗用）。 */
+export function latexToMarkdown(src: string): string {
+  const md = applyCommands(src, false);
+  return md.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** 章节标题 LaTeX → 纯文本（大纲/全文预览用）。 */
+export function latexHeadingToText(src: string): string {
+  return applyCommands(src, false).replace(/[#*`]/g, '').trim();
+}
