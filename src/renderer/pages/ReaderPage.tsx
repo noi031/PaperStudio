@@ -61,7 +61,11 @@ async function loadPdfjs() {
 
 const KIND_LABEL: Record<string, string> = { selected: '选中总结', full: '全文总结' };
 
-/** 提取论文含图页（operatorList 含图片绘制指令的页）为 PNG dataURL，供总结图文并茂。 */
+/** 提取论文含图页为 PNG dataURL，供总结图文并茂。
+ *  识图策略（避免把大段文字页误截成图）：
+ *    a) 文本量极少（≤800 字符）的页：整页基本就是图（矢量图/扫描图/海报页）；
+ *    b) 文字较多的页：页内位图覆盖面积 ≥ 20% 页面时才认为是嵌图页（Figure），
+ *       小位图（公式渲染、LOGO、水印）直接忽略。 */
 async function extractFigureImages(
   doc: import('pdfjs-dist').PDFDocumentProxy,
   maxFigs = 6,
@@ -72,11 +76,40 @@ async function extractFigureImages(
     try {
       const page = await doc.getPage(i);
       const ops = await page.getOperatorList();
-      const hasImage = ops.fnArray.some(
-        (fn: number) => fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject,
-      );
-      if (!hasImage) continue;
-      const viewport = page.getViewport({ scale: 1.5 });
+      // 累计页内位图面积（像素²）——paintImageXObject 的图片名可从 page.objs 查到尺寸。
+      let bitmapArea = 0;
+      for (let j = 0; j < ops.fnArray.length; j++) {
+        const fn = ops.fnArray[j];
+        if (fn === OPS.paintImageXObject) {
+          try {
+            const img = page.objs.get(ops.argsArray[j][0] as string) as { width?: number; height?: number } | null;
+            const w = img?.width;
+            const h = img?.height;
+            if (typeof w === 'number' && typeof h === 'number' && Number.isFinite(w) && Number.isFinite(h)) {
+              bitmapArea += w * h;
+            }
+          } catch {
+            // 图片对象拿不到尺寸则忽略
+          }
+        } else if (fn === OPS.paintInlineImageXObject) {
+          const fmt = ops.argsArray[j][0] as { width?: number; height?: number } | undefined;
+          const w = fmt?.width;
+          const h = fmt?.height;
+          if (typeof w === 'number' && typeof h === 'number' && Number.isFinite(w) && Number.isFinite(h)) {
+            bitmapArea += w * h;
+          }
+        }
+      }
+      // 页面文本量（字符数）
+      const tc = await page.getTextContent();
+      const chars = tc.items.reduce((s, it) => s + ('str' in it ? it.str.length : 0), 0);
+      const vp1 = page.getViewport({ scale: 1 });
+      const pageArea = vp1.width * vp1.height;
+      const imgRatio = pageArea > 0 ? bitmapArea / pageArea : 0;
+      const isFigurePage = chars <= 800 || imgRatio >= 0.2;
+      if (!isFigurePage) continue;
+      // 识图用 2.0 倍渲染，保证 LLM 能看清图表细节。
+      const viewport = page.getViewport({ scale: 2.0 });
       const canvas = document.createElement('canvas');
       canvas.width = Math.floor(viewport.width);
       canvas.height = Math.floor(viewport.height);
