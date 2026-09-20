@@ -204,7 +204,13 @@ export function WritingPage() {
     .map((id) => papers.find((p) => p.id === id))
     .filter((p): p is NonNullable<typeof p> => Boolean(p));
   const mainPaper = current?.paperId ? papers.find((p) => p.id === current.paperId) : undefined;
-  const refList = [mainPaper, ...refPapers].filter((p): p is NonNullable<typeof p> => Boolean(p));
+  // 完整编号列表 = 主论文(ref1) + 勾选论文(ref2…)；referenceIds 里若残留主论文则去重，避免出现两篇相同
+  const seenRefs = new Set<string>();
+  const refList = [mainPaper, ...refPapers].filter((p): p is NonNullable<typeof p> => {
+    if (!p || seenRefs.has(p.id)) return false;
+    seenRefs.add(p.id);
+    return true;
+  });
 
   const handleCreate = async () => {
     const paper = papers.find((p) => p.id === paperId) ?? null;
