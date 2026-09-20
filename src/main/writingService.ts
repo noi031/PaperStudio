@@ -212,7 +212,14 @@ export async function exportDraft(
   dir: string,
 ): Promise<{ filePath: string; bibPath?: string }> {
   fs.mkdirSync(dir, { recursive: true });
-  const safe = input.title.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 80) || 'draft';
+  // 文件名必须纯 ASCII（英文+数字+_ - .）：中文/书名号等非 ASCII 全部去掉，避免 latex/bibtex 工具链兼容问题
+  const safe =
+    input.title
+      .replace(/[\\/:*?"<>|\s]+/g, '_')
+      .replace(/[^\x20-\x7E]/g, '')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 80) || 'draft';
   const ext = { docx: 'docx', md: 'md', tex: 'tex', bib: 'tex' }[format];
   const bibPath = path.join(dir, `${safe}.bib`);
   const filePath = path.join(dir, format === 'bib' ? `${safe}.bib` : `${safe}.${ext}`);
