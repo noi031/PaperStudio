@@ -183,7 +183,7 @@ export function ReaderPage({
   onBack: () => void;
   onOpenAssistant: () => void;
 }) {
-  const { summaries, streaming, notes, loadSummaries, loadNotes, addNote, updateNote, deleteNote, startSummary, handleSummaryEvent } =
+  const { summaries, streaming, notes, loadSummaries, loadNotes, addNote, updateNote, deleteNote, startSummary, handleSummaryEvent, loadPapers } =
     useLibraryStore();
   const viewerContainerRef = useRef<HTMLDivElement | null>(null);
   const viewerElRef = useRef<HTMLDivElement | null>(null);
@@ -334,6 +334,8 @@ export function ReaderPage({
         if (cancelled) return;
         const data = res.data;
         setTitle(res.title);
+        // 刷新共享论文列表（服务端已记录 last_read_at，回到文献库/方向建议/写作/演示时排序最新）
+        void loadPapers();
         const task = pdf.getDocument({ data, standardFontDataUrl: standardFontsUrl, cMapUrl, cMapPacked: true });
         const doc = await task.promise;
         docRef.current = { doc, data };
