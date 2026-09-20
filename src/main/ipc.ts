@@ -599,14 +599,13 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
     if (empty > 0) return { ok: false, message: `还有 ${empty} 个小节未撰写（可留空导出，或先补齐）` };
     const { references } = draftContext(d);
     try {
-      const filePath = await exportDraft(
+      const { filePath, bibPath } = await exportDraft(
         { title: d.title, username: getSettings().username || 'me', sections: d.sections, references },
         req.format ?? 'tex',
         exportDir,
       );
       drafts.update(d.id, { exportedPath: filePath });
-      // 导出 TEX 时服务端会同时在同目录生成 refs.bib，一并返回下载路径（无条件：无参考论文也生成空 bib）
-      const bibPath = req.format === 'tex' ? path.join(exportDir, 'refs.bib') : undefined;
+      // 导出 TEX 时服务端同时生成与 .tex 同名的 .bib，一并返回下载路径（无条件：无参考论文也生成空 bib）
       return { ok: true, path: filePath, bibPath };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };

@@ -417,7 +417,7 @@ export function WritingPage() {
                         sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, fontSize: 13 }}
                       >
                         <FileDownloadIcon sx={{ fontSize: 15 }} />
-                        下载参考文献 refs.bib
+                        下载参考文献：{fileNameOf(exportResult.bibPath)}
                       </Link>
                     )}
                   </Stack>
