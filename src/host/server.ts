@@ -163,9 +163,93 @@ function serveFile(res: http.ServerResponse, file: string, opts: { download?: st
 
 // ── 额外的 Web 专有通道 ────────────────────────────────────────
 /** marked 为纯 ESM 包：CJS 输出下必须走真正的动态 import（tsc 会把字面 import() 降级为 require）。 */
+interface MarkedLike {
+  parse(md: string): string;
+  use(options: { extensions: Array<Record<string, unknown>> }): void;
+}
+
 const dynamicImport = new Function('specifier', 'return import(specifier);') as (
   specifier: string,
-) => Promise<{ marked: { parse(md: string): string } }>;
+) => Promise<{ marked: MarkedLike }>;
+
+// ── Markdown 弹窗页的公式渲染（KaTeX）───────────────────────────
+// marked 无内置 LaTeX 支持：注册行内 $...$ 与块级 $$...$$ 扩展，用 KaTeX 渲染为 HTML；
+// KaTeX 字体静态文件首次使用时复制到 markdown 目录（/files/markdown/katex-fonts/ 可访问）。
+import katex from 'katex';
+
+let mathExtensionsRegistered = false;
+let katexCssCache: string | null = null;
+
+function getKatexCss(appRoot: string): string {
+  if (katexCssCache !== null) return katexCssCache;
+  try {
+    const cssPath = path.join(appRoot, 'node_modules', 'katex', 'dist', 'katex.min.css');
+    katexCssCache = fs
+      .readFileSync(cssPath, 'utf8')
+      .replace(/url\(fonts\//g, 'url(/files/markdown/katex-fonts/');
+  } catch {
+    katexCssCache = '';
+  }
+  return katexCssCache;
+}
+
+function ensureKatexFonts(appRoot: string, markdownDir: string): void {
+  try {
+    const dst = path.join(markdownDir, 'katex-fonts');
+    if (fs.existsSync(dst)) return;
+    const src = path.join(appRoot, 'node_modules', 'katex', 'dist', 'fonts');
+    if (!fs.existsSync(src)) return;
+    fs.mkdirSync(dst, { recursive: true });
+    fs.cpSync(src, dst, { recursive: true });
+  } catch {
+    // 字体拷贝失败不影响页面（公式缺字体时仍可用系统字体降级）
+  }
+}
+
+/** 注册 marked 的 $...$ / $$...$$ 公式扩展（模块级只注册一次）。 */
+async function registerMathExtensions(): Promise<void> {
+  if (mathExtensionsRegistered) return;
+  const { marked } = await dynamicImport('marked');
+  const render = (math: string, displayMode: boolean): string =>
+    katex.renderToString(math, { displayMode, throwOnError: false, strict: false });
+  marked.use({
+    extensions: [
+      {
+        name: 'inlineMath',
+        level: 'inline',
+        start(src: string) {
+          const i = src.indexOf('$');
+          return i < 0 ? undefined : i;
+        },
+        tokenizer(src: string) {
+          const m = /^\$([^$\n]+?)\$/.exec(src);
+          if (m) return { type: 'inlineMath', raw: m[0], math: m[1] };
+          return undefined;
+        },
+        renderer(token: { math: string }) {
+          return render(token.math, false);
+        },
+      },
+      {
+        name: 'blockMath',
+        level: 'block',
+        start(src: string) {
+          const i = src.indexOf('$$');
+          return i < 0 ? undefined : i;
+        },
+        tokenizer(src: string) {
+          const m = /^\$\$([\s\S]+?)\$\$/.exec(src);
+          if (m) return { type: 'blockMath', raw: m[0], math: m[1] };
+          return undefined;
+        },
+        renderer(token: { math: string }) {
+          return render(token.math, true);
+        },
+      },
+    ] as Array<Record<string, unknown>>,
+  });
+  mathExtensionsRegistered = true;
+}
 
 function registerWebChannels(ctx: AppContext): void {
   // Electron 版的 markdown:open 依赖 BrowserWindow 开新窗口；Web 版把 MD 渲染成 HTML
@@ -180,9 +264,14 @@ function registerWebChannels(ctx: AppContext): void {
       }
       const content = fs.readFileSync(file, 'utf8');
       const { marked } = await dynamicImport('marked');
+      // 公式渲染：$...$ 行内 / $$...$$ 块级（KaTeX），字体文件保证可访问。
+      await registerMathExtensions();
+      const appRoot = path.resolve(__dirname, '..', '..', '..');
+      ensureKatexFonts(appRoot, ctx.markdownDir);
+      const katexCss = getKatexCss(appRoot);
       const html = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: https:; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; img-src 'self' data: https:; base-uri 'none'">
 <title>${path.basename(file)}</title>
 <style>
   body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 860px; margin: 0 auto; padding: 32px 40px 80px; color: #1f2328; line-height: 1.7; }
@@ -194,6 +283,7 @@ function registerWebChannels(ctx: AppContext): void {
   table { border-collapse: collapse; } th, td { border: 1px solid #d0d7de; padding: 6px 10px; }
   img { max-width: 100%; height: auto; border: 1px solid #eaeef2; border-radius: 4px; }
   a { color: #0969da; } ul, ol { padding-left: 22px; }
+  ${katexCss}
 </style></head>
 <body>${marked.parse(content)}</body></html>`;
       const htmlFile = path.join(ctx.markdownDir, `${path.basename(file, '.md')}.html`);
