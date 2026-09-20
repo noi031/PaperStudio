@@ -186,8 +186,10 @@ export function ReaderPage({
   const [editingNote, setEditingNote] = useState<NoteRecord | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editColor, setEditColor] = useState<string>(NOTE_COLORS[0]);
-  // 基于全文/高亮的 AI 问答（回答生成 Markdown 文件，边框只给链接，点击弹窗查看）
-  const [qaItems, setQaItems] = useState<Array<{ id: string; question: string; mdPath: string | null; error: string | null; busy: boolean }>>([]);
+  // 基于全文/高亮的 AI 问答（回答生成 Markdown 文件，边框只给链接，点击弹窗查看）。
+  // 问答历史按论文绑定：qaByPaper[paperId]，切换论文互不干扰。
+  const [qaByPaper, setQaByPaper] = useState<Record<string, Array<{ id: string; question: string; mdPath: string | null; error: string | null; busy: boolean }>>>({});
+  const qaItems = qaByPaper[paperId ?? ''] ?? [];
   const [qaInput, setQaInput] = useState('');
   // 问答上下文来源：full=全文；selection=选中的高亮文本
   const [qaContext, setQaContext] = useState<'full' | 'selection'>('full');
@@ -197,17 +199,28 @@ export function ReaderPage({
   useEffect(() => {
     const off = window.paper.onQaEvent((evt) => {
       if (!evt || typeof evt.id !== 'string') return;
-      setQaItems((items) => {
-        const idx = items.findIndex((it) => it.id === evt.id);
-        if (idx < 0) return items;
-        const next = [...items];
-        if (evt.kind === 'done') next[idx] = { ...next[idx], busy: false, mdPath: evt.mdPath };
-        else if (evt.kind === 'error') next[idx] = { ...next[idx], busy: false, error: evt.message };
+      setQaByPaper((all) => {
+        const next = { ...all };
+        for (const pid of Object.keys(next)) {
+          const idx = next[pid].findIndex((it) => it.id === evt.id);
+          if (idx < 0) continue;
+          const items = [...next[pid]];
+          if (evt.kind === 'done') items[idx] = { ...items[idx], busy: false, mdPath: evt.mdPath };
+          else if (evt.kind === 'error') items[idx] = { ...items[idx], busy: false, error: evt.message };
+          next[pid] = items;
+          return next;
+        }
         return next;
       });
     });
     return off;
   }, []);
+
+  // 切换论文时重置高亮问答上下文（问答历史本身按论文隔离保留）。
+  useEffect(() => {
+    setQaContext('full');
+    setQaSelectionText('');
+  }, [paperId]);
 
   const openQaMd = (mdPath: string) => {
     void window.paper.invoke('markdown:open', { path: mdPath }).then((r) => {
@@ -219,21 +232,27 @@ export function ReaderPage({
 
   const askQa = async () => {
     const q = qaInput.trim();
-    if (!q || qaItems.some((it) => it.busy)) return;
+    if (!q || qaItems.some((it) => it.busy) || !paperId) return;
     const contextText = qaContext === 'selection' ? qaSelectionText : fullText;
     if (!contextText.trim()) return;
     setQaInput('');
     try {
       const { id } = await window.paper.invoke('qa:run', {
-        paperId: paperId ?? 'unknown',
+        paperId,
         paperTitle: title || '未知论文',
         fullText: contextText,
         question: q,
       });
-      setQaItems((items) => [...items, { id, question: q, mdPath: null, error: null, busy: true }]);
+      setQaByPaper((all) => ({
+        ...all,
+        [paperId]: [...(all[paperId] ?? []), { id, question: q, mdPath: null, error: null, busy: true }],
+      }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setQaItems((items) => [...items, { id: `err-${Date.now()}`, question: q, mdPath: null, error: message, busy: false }]);
+      setQaByPaper((all) => ({
+        ...all,
+        [paperId]: [...(all[paperId] ?? []), { id: `err-${Date.now()}`, question: q, mdPath: null, error: message, busy: false }],
+      }));
     }
   };
 
