@@ -601,7 +601,9 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
         exportDir,
       );
       drafts.update(d.id, { exportedPath: filePath });
-      return { ok: true, path: filePath };
+      // 导出 TEX 时服务端会同时在同目录生成 refs.bib（存在参考文献时），一并返回下载路径
+      const bibPath = req.format === 'tex' && references.length > 0 ? path.join(exportDir, 'refs.bib') : undefined;
+      return { ok: true, path: filePath, bibPath };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }

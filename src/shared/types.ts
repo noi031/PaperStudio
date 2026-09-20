@@ -260,7 +260,7 @@ export interface IpcContract {
   };
   'drafts:export': {
     req: { id: string; format?: 'docx' | 'md' | 'tex' | 'bib' };
-    res: { ok: boolean; path?: string; message?: string };
+    res: { ok: boolean; path?: string; bibPath?: string; message?: string };
   };
   // ── P7 演示 ──
   'presentations:list': { req: void; res: PresentationRecord[] };

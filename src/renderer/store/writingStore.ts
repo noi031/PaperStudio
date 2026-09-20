@@ -14,7 +14,7 @@ interface WritingStore {
   generateOutline: (id: string) => Promise<boolean>;
   writeSection: (id: string, index: number, instruction?: string, existing?: string) => Promise<boolean>;
   setSection: (id: string, index: number, content: string) => Promise<void>;
-  export: (id: string, format?: 'docx' | 'md' | 'tex' | 'bib') => Promise<string | null>;
+  export: (id: string, format?: 'docx' | 'md' | 'tex' | 'bib') => Promise<{ path: string | null; bibPath: string | null }>;
   setError: (message: string | null) => void;
 }
 
@@ -104,13 +104,13 @@ export const useWritingStore = create<WritingStore>((set, get) => ({
       const res = await window.paper.invoke('drafts:export', { id, format });
       if (!res.ok) {
         set({ error: res.message ?? '导出失败' });
-        return null;
+        return { path: null, bibPath: null };
       }
       await get().load();
-      return res.path ?? null;
+      return { path: res.path ?? null, bibPath: res.bibPath ?? null };
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) });
-      return null;
+      return { path: null, bibPath: null };
     } finally {
       set({ busy: { ...get().busy, exportingFor: null } });
     }

@@ -124,10 +124,14 @@ export function WritingPage() {
     setLocalDrafts({});
   };
 
+  const [exportResult, setExportResult] = useState<{ path: string | null; bibPath: string | null }>({ path: null, bibPath: null });
+
   const handleExport = async (format: 'docx' | 'md' | 'tex' | 'bib') => {
     if (!current) return;
+    setExportResult({ path: null, bibPath: null });
     await flushLocalDrafts();
-    await exportDraft(current.id, format);
+    const r = await exportDraft(current.id, format);
+    setExportResult(r);
   };
 
   /** 整篇预览：大纲标题 + 各小节内容 → Markdown（公式 $…$ 保留）→ 服务端渲染 HTML 弹窗。 */
@@ -385,16 +389,29 @@ export function WritingPage() {
                   正在导出…
                 </Typography>
               )}
-              {current.exportedPath && (
-                  <Link
-                    href={downloadUrlOf(current.exportedPath) ?? '#'}
-                    download={fileNameOf(current.exportedPath)}
-                    underline="hover"
-                    sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, mb: 1, fontSize: 13 }}
-                  >
-                    <FileDownloadIcon sx={{ fontSize: 15 }} />
-                    下载导出文件：{fileNameOf(current.exportedPath)}
-                  </Link>
+              {(exportResult.path ?? current.exportedPath) && (
+                  <Stack direction="row" spacing={2} sx={{ mb: 1, flexWrap: 'wrap' }}>
+                    <Link
+                      href={downloadUrlOf(exportResult.path ?? current.exportedPath) ?? '#'}
+                      download={fileNameOf(exportResult.path ?? current.exportedPath)}
+                      underline="hover"
+                      sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, fontSize: 13 }}
+                    >
+                      <FileDownloadIcon sx={{ fontSize: 15 }} />
+                      下载导出文件：{fileNameOf(exportResult.path ?? current.exportedPath)}
+                    </Link>
+                    {exportResult.bibPath && (
+                      <Link
+                        href={downloadUrlOf(exportResult.bibPath) ?? '#'}
+                        download={fileNameOf(exportResult.bibPath)}
+                        underline="hover"
+                        sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, fontSize: 13 }}
+                      >
+                        <FileDownloadIcon sx={{ fontSize: 15 }} />
+                        下载参考文献 refs.bib
+                      </Link>
+                    )}
+                  </Stack>
                 )}
               {outlineEditing ? (
                 <Stack spacing={1} sx={{ mt: 1 }}>
