@@ -9,13 +9,19 @@ const OUTLINE_SYSTEM =
   '你是学术写作助手。用户会给出 1-N 篇参考论文（标题/作者/年份/摘要），请参考它们的结构与写作风格，' +
   '为新论文生成 8-12 节大纲。每个小节给出 heading 与 description（该节要写什么、包含哪些小节）。' +
   '输出 JSON 数组：[{"heading":"...","description":"..."}]。' +
-  'heading 用论文语言（中文或英文均可，保留必要术语），description 中数学公式可用 LaTeX 记号描述（如 $\\gamma$、$B^\\pm \\to D(K^0_S h^{\\prime +} h^{\\prime -}) h^\\pm$）。';
+  'heading 与 description 一律用中文（必要术语可附英文原文），description 中数学公式可用 LaTeX 记号描述（如 $\\gamma$、$B^\\pm \\to D(K^0_S h^{\\prime +} h^{\\prime -}) h^\\pm$）。';
 
 const SECTION_SYSTEM =
   '你是学术写作助手。根据参考论文信息与大纲，为指定小节撰写 LaTeX 论文初稿：逻辑清晰、内容扎实，500-1200 字。' +
   '必须用 LaTeX 源码输出：数学公式一律用标准 LaTeX 记号（如 $\\gamma$、$E = mc^2$、$\\frac{a}{b}$、$B^\\pm \\to D^0 K^\\pm$），' +
   '需要引用参考论文时用 \\cite{key}（key 格式为 ref1、ref2…，对应参考论文序号），列表用 itemize/enumerate，强调用 \\textbf{}。' +
   '只输出小节正文源码（不要 \\section{}、\\begin{document} 等外壳），第一行不要重复小节标题。';
+
+/** 统一语言要求条款（追加在每个写作 system 消息尾部，对默认与用户自定义提示词都生效）：
+ *  正文一律中文撰写，不中英混杂；输入指令是中文就用中文输出。 */
+const LANG_RULE =
+  '\n【语言要求·必须遵守】正文统一用中文撰写（术语、公式、引用键名、参考文献标题等可保留原文）；' +
+  '句子不得中英混杂；输出语言与撰写指令所用语言保持一致；不要出现与指令语言无关的语种。';
 
 export interface OutlineOptions {
   /** 主论文（可能为 null：无关联论文时只依据参考论文） */
@@ -45,29 +51,45 @@ export function buildOutlineMessages(
   const refText = refs.length > 0 ? buildReferencesText(refs) : '（无参考论文，请按通用学术论文结构生成大纲）';
   const target = opts.paper ? `要写的新论文主题：${opts.paper.title}\n` : '要写的新论文主题：（未指定，请生成通用学术论文大纲）';
   return [
-    { role: 'system', content: system?.trim() || OUTLINE_SYSTEM },
+    { role: 'system', content: (system?.trim() || OUTLINE_SYSTEM) + LANG_RULE },
     { role: 'user', content: `${target}\n\n参考论文：\n${refText}\n\n请生成大纲。` },
   ];
 }
 
-/** 组装单节撰写请求消息（纯函数，供单测）。system 为空时用内置默认。 */
+/** 组装单节撰写请求消息（纯函数，供单测）。system 为空时用内置默认。
+ *  instruction：可选的人工修改建议（撰写/重写时以独立 user 消息追加，模型严格遵循）。
+ *  existing：可选的小节已有内容——AI 重写时基于它修改（不传则从零撰写）。 */
 export function buildSectionMessages(
   opts: OutlineOptions,
   outline: DraftOutlineItem[],
   item: DraftOutlineItem,
   system?: string,
+  instruction?: string,
+  existing?: string,
 ): Array<{ role: 'system' | 'user'; content: string }> {
   const refs = opts.paper ? [opts.paper, ...opts.references.filter((r) => r.id !== opts.paper!.id)] : opts.references;
   const refText = refs.length > 0 ? buildReferencesText(refs, 400) : '（无参考论文）';
   const outlineText = outline.map((o, i) => `${i + 1}. ${o.heading}${o.description ? `：${o.description}` : ''}`).join('\n');
   const target = opts.paper ? `要写的新论文主题：${opts.paper.title}` : '要写的新论文主题：（未指定）';
-  return [
-    { role: 'system', content: system?.trim() || SECTION_SYSTEM },
+  const msgs: Array<{ role: 'system' | 'user'; content: string }> = [
+    { role: 'system', content: (system?.trim() || SECTION_SYSTEM) + LANG_RULE },
     {
       role: 'user',
       content: `${target}\n\n参考论文：\n${refText}\n\n大纲：\n${outlineText}\n\n请用 LaTeX 源码撰写第 ${outline.indexOf(item) + 1} 节「${item.heading}」的正文。`,
     },
   ];
+  const tip = instruction?.trim();
+  if (tip) msgs.push({ role: 'user', content: `人工修改建议（请在撰写时严格遵循）：\n${tip}` });
+  const prev = existing?.trim();
+  if (prev) {
+    msgs.push({
+      role: 'user',
+      content:
+        `该小节已有内容（请在保留其正确内容的基础上，结合上述要求/修改建议进行修改完善，` +
+        `输出修改后的完整小节 LaTeX 源码；不要只输出改动片段）：\n\`\`\`latex\n${prev}\n\`\`\``,
+    });
+  }
+  return msgs;
 }
 
 /** 调用 LLM 生成大纲。 */
@@ -88,14 +110,20 @@ export async function generateOutline(
   return valid;
 }
 
-/** 调用 LLM 撰写单个小节（LaTeX 源码）。 */
+/** 调用 LLM 撰写/重写单个小节（LaTeX 源码）。instruction 为可选的人工修改建议；
+ *  existing 为已有内容——提供时模型在此基础上修改完善，否则从零撰写。 */
 export async function writeSection(
   settings: PaperSettings,
   opts: OutlineOptions,
   outline: DraftOutlineItem[],
   item: DraftOutlineItem,
+  instruction?: string,
+  existing?: string,
 ): Promise<string> {
-  const text = await chatText(settings, buildSectionMessages(opts, outline, item, settings.promptSection));
+  const text = await chatText(
+    settings,
+    buildSectionMessages(opts, outline, item, settings.promptSection, instruction, existing),
+  );
   return text.trim();
 }
 

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Db } from './db';
 import type { PaperSettings } from '../shared/types.js';
+import type { DraftOutlineItem } from '../shared/types.js';
 import type { AgentService } from './agentService';
 import type { AgentSessionLite, AgentMessageLite, PaperHit, PaperRecord } from '../shared/types.js';
 import type { PaperRepo } from './paperRepo';
@@ -542,7 +543,7 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
     }
   });
 
-  ipc.handle('drafts:writeSection', async (req: { id: string; index: number }) => {
+  ipc.handle('drafts:writeSection', async (req: { id: string; index: number; instruction?: string; existing?: string }) => {
     const d = drafts.get(req.id);
     if (!d) return { ok: false, message: '草稿不存在' };
     if (d.outline.length === 0) return { ok: false, message: '请先生成大纲' };
@@ -551,7 +552,14 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
     const { paper, references } = draftContext(d);
     if (!paper && references.length === 0) return { ok: false, message: '草稿没有关联任何论文' };
     try {
-      const content = await writeSection(getSettings(), { paper, references }, d.outline, item);
+      const content = await writeSection(
+        getSettings(),
+        { paper, references },
+        d.outline,
+        item,
+        req.instruction,
+        req.existing,
+      );
       // 原子更新该小节（并发撰写多个小节时互不覆盖）
       drafts.setSectionContent(req.id, req.index, content);
       const record = drafts.get(req.id)!;
@@ -564,6 +572,14 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
   ipc.handle('drafts:setSection', (req: { id: string; index: number; content: string }) => {
     drafts.setSectionContent(req.id, req.index, req.content);
     return drafts.get(req.id)!;
+  });
+
+  // 手工编辑大纲（标题/说明增删改）；已撰写小节内容按标题保留。
+  ipc.handle('drafts:setOutline', (req: { id: string; outline: DraftOutlineItem[] }) => {
+    const items = (Array.isArray(req.outline) ? req.outline : []).filter(
+      (o) => o && typeof o.heading === 'string' && o.heading.trim(),
+    );
+    return drafts.setOutline(req.id, items);
   });
 
   ipc.handle('drafts:export', async (req: { id: string; format?: 'docx' | 'md' | 'tex' | 'bib' }) => {

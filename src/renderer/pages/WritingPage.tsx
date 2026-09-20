@@ -5,6 +5,7 @@ import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
+import AddIcon from '@mui/icons-material/Add';
 import CircularProgress from '@mui/material/CircularProgress';
 import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
@@ -61,6 +62,12 @@ export function WritingPage() {
       else next.add(key);
       return next;
     });
+  // 人工修改建议：每小节一个（AI 撰写/重写时传递给模型），key = `${draftId}:${index}`
+  const [instructions, setInstructions] = useState<Record<string, string>>({});
+  const [instructionOpen, setInstructionOpen] = useState<Set<string>>(new Set());
+  // 大纲手工编辑：进入编辑模式时拷贝一份草稿大纲
+  const [outlineEditing, setOutlineEditing] = useState(false);
+  const [outlineDraft, setOutlineDraft] = useState<Array<{ heading: string; description: string }>>([]);
   // 小节编辑本地缓冲 + 防抖落库（避免每敲一个字一次 IPC/写库）
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -73,6 +80,11 @@ export function WritingPage() {
   // 切换草稿/刷新后丢弃未提交的本地缓冲
   useEffect(() => {
     setLocalDrafts({});
+    setInstructions({});
+    setInstructionOpen(new Set());
+    setPreviewKeys(new Set());
+    setOutlineEditing(false);
+    setOutlineDraft([]);
     for (const t of Object.values(saveTimers.current)) clearTimeout(t);
     saveTimers.current = {};
   }, [currentId]);
@@ -109,8 +121,31 @@ export function WritingPage() {
   };
 
   /** 整篇预览：大纲标题 + 各小节内容 → Markdown（公式 $…$ 保留）→ 服务端渲染 HTML 弹窗。 */
-  const handlePreviewFull = async () => {
+  /** 大纲手工编辑：进入编辑模式 / 保存 / 取消。 */
+  const startOutlineEdit = () => {
     if (!current) return;
+    setOutlineDraft(current.outline.map((o) => ({ heading: o.heading, description: o.description ?? '' })));
+    setOutlineEditing(true);
+  };
+  const saveOutline = async () => {
+    if (!current) return;
+    const items = outlineDraft
+      .map((o) => ({ heading: o.heading.trim(), description: o.description.trim() }))
+      .filter((o) => o.heading);
+    if (items.length === 0) {
+      setError('大纲至少保留一个小节');
+      return;
+    }
+    try {
+      await window.paper.invoke('drafts:setOutline', { id: current.id, outline: items });
+      await load();
+      setOutlineEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handlePreviewFull = async () => {    if (!current) return;
     const lines: string[] = [];
     lines.push(`# ${latexHeadingToText(current.title) || '论文草稿'}`);
     lines.push('');
@@ -272,6 +307,14 @@ export function WritingPage() {
                 >
                   预览全文
                 </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={current.outline.length === 0}
+                  onClick={startOutlineEdit}
+                >
+                  编辑大纲
+                </Button>
               </Stack>
               <PromptEditor settingKey="promptOutline" label="生成大纲" hint="「生成大纲」使用的 AI 提示词" />
               <PromptEditor settingKey="promptSection" label="撰写小节" hint="「AI 撰写 / AI 重写」使用的 AI 提示词" />
@@ -296,7 +339,57 @@ export function WritingPage() {
                     下载导出文件：{fileNameOf(current.exportedPath)}
                   </Link>
                 )}
-              {current.outline.length === 0 ? (
+              {outlineEditing ? (
+                <Stack spacing={1} sx={{ mt: 1 }}>
+                  {outlineDraft.map((o, i) => (
+                    <Box key={i} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                        <Chip size="small" label={`${i + 1}`} />
+                        <TextField
+                          size="small"
+                          fullWidth
+                          placeholder="小节标题"
+                          value={o.heading}
+                          onChange={(e) =>
+                            setOutlineDraft((d) => d.map((x, j) => (j === i ? { ...x, heading: e.target.value } : x)))
+                          }
+                        />
+                        <IconButton size="small" onClick={() => setOutlineDraft((d) => d.filter((_, j) => j !== i))}>
+                          <DeleteOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </Stack>
+                      <TextField
+                        size="small"
+                        fullWidth
+                        multiline
+                        minRows={2}
+                        placeholder="大纲说明（该节要写什么）"
+                        value={o.description}
+                        onChange={(e) =>
+                          setOutlineDraft((d) => d.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))
+                        }
+                        sx={{ mt: 0.5 }}
+                      />
+                    </Box>
+                  ))}
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<AddIcon />}
+                    onClick={() => setOutlineDraft((d) => [...d, { heading: '', description: '' }])}
+                  >
+                    新增小节
+                  </Button>
+                  <Stack direction="row" spacing={1}>
+                    <Button size="small" variant="contained" onClick={() => void saveOutline()}>
+                      保存大纲
+                    </Button>
+                    <Button size="small" variant="outlined" onClick={() => setOutlineEditing(false)}>
+                      取消
+                    </Button>
+                  </Stack>
+                </Stack>
+              ) : current.outline.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   尚未生成大纲。点击「生成大纲」后，逐节用 AI 撰写或手动编辑。
                 </Typography>
@@ -330,13 +423,49 @@ export function WritingPage() {
                           <Button
                             size="small"
                             variant="outlined"
+                            color={instructions[`${current.id}:${i}`]?.trim() ? 'warning' : 'inherit'}
+                            onClick={() =>
+                              setInstructionOpen((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(`${current.id}:${i}`)) next.delete(`${current.id}:${i}`);
+                                else next.add(`${current.id}:${i}`);
+                                return next;
+                              })
+                            }
+                          >
+                            {instructions[`${current.id}:${i}`]?.trim() ? '✍️ 修改建议' : '修改建议'}
+                          </Button>
+                          <Button
+                            size="small"
+                            variant="outlined"
                             startIcon={writingThis ? <CircularProgress size={14} /> : <EditNoteIcon />}
                             disabled={writingThis}
-                            onClick={() => void writeSection(current.id, i)}
+                            onClick={() =>
+                              void writeSection(
+                                current.id,
+                                i,
+                                instructions[`${current.id}:${i}`]?.trim() || undefined,
+                                (localDrafts[`${current.id}:${i}`] ?? section?.content ?? '').trim() || undefined,
+                              )
+                            }
                           >
                             {writingThis ? '撰写中…' : section?.content ? 'AI 重写' : 'AI 撰写'}
                           </Button>
                         </Stack>
+                        {instructionOpen.has(`${current.id}:${i}`) && (
+                          <TextField
+                            size="small"
+                            fullWidth
+                            multiline
+                            minRows={2}
+                            placeholder="人工修改建议（AI 撰写/重写时会严格遵循），如：缩短一半、突出实验结果、补一段公式推导…"
+                            value={instructions[`${current.id}:${i}`] ?? ''}
+                            onChange={(e) =>
+                              setInstructions((s) => ({ ...s, [`${current.id}:${i}`]: e.target.value }))
+                            }
+                            sx={{ mt: 0.5 }}
+                          />
+                        )}
                         {item.description && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                             大纲说明：{latexToText(item.description) || item.description}

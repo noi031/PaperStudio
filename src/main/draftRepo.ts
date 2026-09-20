@@ -99,4 +99,32 @@ export class DraftRepo {
       )
       .run(index, JSON.stringify(updated), id);
   }
+
+  /** 手工编辑大纲（重排/增删/改标题说明）：outline_json 原子替换；
+   *  sections 与大纲重新对齐——标题未变的小节保留已撰写内容，新增项为空。 */
+  setOutline(id: string, outline: DraftOutlineItem[]): DraftRecord {
+    const cur = this.get(id);
+    if (!cur) return this.get(id)!;
+    // 旧内容按「标题」建索引（同位置标题未变时优先用同位置的 content，避免误配）
+    const oldSections = cur.sections;
+    const byHeading = new Map<string, string>();
+    oldSections.forEach((s) => {
+      if (s.content && !byHeading.has(s.heading)) byHeading.set(s.heading, s.content);
+    });
+    const sections: DraftSection[] = outline.map((o, i) => {
+      const samePos = oldSections[i];
+      const content =
+        samePos?.heading === o.heading && samePos.content ? samePos.content : byHeading.get(o.heading) ?? '';
+      return { heading: o.heading, description: o.description, content };
+    });
+    const transaction = this.db.transaction(() => {
+      this.db.prepare('UPDATE drafts SET outline_json = ?, sections_json = ? WHERE id = ?').run(
+        JSON.stringify(outline),
+        JSON.stringify(sections),
+        id,
+      );
+    });
+    transaction();
+    return this.get(id)!;
+  }
 }

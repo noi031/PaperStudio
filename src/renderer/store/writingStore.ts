@@ -12,7 +12,7 @@ interface WritingStore {
   create: (paperId: string | null, title: string, referenceIds?: string[]) => Promise<DraftRecord | null>;
   remove: (id: string) => Promise<void>;
   generateOutline: (id: string) => Promise<boolean>;
-  writeSection: (id: string, index: number) => Promise<boolean>;
+  writeSection: (id: string, index: number, instruction?: string, existing?: string) => Promise<boolean>;
   setSection: (id: string, index: number, content: string) => Promise<void>;
   export: (id: string, format?: 'docx' | 'md' | 'tex' | 'bib') => Promise<string | null>;
   setError: (message: string | null) => void;
@@ -65,12 +65,12 @@ export const useWritingStore = create<WritingStore>((set, get) => ({
     }
   },
 
-  writeSection: async (id, index) => {
+  writeSection: async (id, index, instruction, existing) => {
     const key = `${id}:${index}`;
     // 并发撰写：把自己的 key 加入集合，不覆盖其他正在撰写的小节
     set({ busy: { ...get().busy, sectionsWriting: [...get().busy.sectionsWriting, key] }, error: null });
     try {
-      const res = await window.paper.invoke('drafts:writeSection', { id, index });
+      const res = await window.paper.invoke('drafts:writeSection', { id, index, instruction, existing });
       if (!res.ok) {
         set({ error: res.message ?? '小节撰写失败' });
         return false;
