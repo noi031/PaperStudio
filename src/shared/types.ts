@@ -114,6 +114,7 @@ export type IpcChannel =
   | 'drafts:writeSection'
   | 'drafts:setSection'
   | 'drafts:setOutline'
+  | 'drafts:setReferences'
   | 'drafts:export'
   | 'markdown:open'
   | 'markdown:preview'
@@ -241,6 +242,10 @@ export interface IpcContract {
   };
   'drafts:setOutline': {
     req: { id: string; outline: DraftOutlineItem[] };
+    res: DraftRecord;
+  };
+  'drafts:setReferences': {
+    req: { id: string; referenceIds: string[] };
     res: DraftRecord;
   };
   'drafts:export': {

@@ -5,6 +5,11 @@ import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
+import Checkbox from '@mui/material/Checkbox';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
 import AddIcon from '@mui/icons-material/Add';
 import CircularProgress from '@mui/material/CircularProgress';
 import Divider from '@mui/material/Divider';
@@ -68,6 +73,14 @@ export function WritingPage() {
   // 大纲手工编辑：进入编辑模式时拷贝一份草稿大纲
   const [outlineEditing, setOutlineEditing] = useState(false);
   const [outlineDraft, setOutlineDraft] = useState<Array<{ heading: string; description: string }>>([]);
+  // 参考文献管理（编号与 \cite{refN} 对应）
+  const [refDialogOpen, setRefDialogOpen] = useState(false);
+  const [refQuery, setRefQuery] = useState('');
+  const [refSelected, setRefSelected] = useState<string[]>([]);
+  // 当前草稿的参考文献详情（按 draft.referenceIds 顺序 = ref1、ref2…）
+  const refPapers = (current?.referenceIds ?? [])
+    .map((id) => papers.find((p) => p.id === id))
+    .filter((p): p is NonNullable<typeof p> => Boolean(p));
   // 小节编辑本地缓冲 + 防抖落库（避免每敲一个字一次 IPC/写库）
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -140,6 +153,24 @@ export function WritingPage() {
       await window.paper.invoke('drafts:setOutline', { id: current.id, outline: items });
       await load();
       setOutlineEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const openRefDialog = () => {
+    setRefSelected([...(current?.referenceIds ?? [])]);
+    setRefQuery('');
+    setRefDialogOpen(true);
+  };
+  const toggleRef = (id: string) =>
+    setRefSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const saveRefs = async () => {
+    if (!current) return;
+    try {
+      await window.paper.invoke('drafts:setReferences', { id: current.id, referenceIds: refSelected });
+      await load();
+      setRefDialogOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

@@ -6,6 +6,9 @@ import 'katex/dist/katex.min.css';
 
 const MATH_BLOCK_RE = /\$\$([\s\S]+?)\$\$/g;
 const MATH_INLINE_RE = /\$([^$\n]+?)\$/g;
+// LaTeX 环境：\[...\] 块级显示公式、\(...\) 行内公式
+const MATH_DISPLAY_BRACKET_RE = /\\\[([\s\S]+?)\\\]/g;
+const MATH_INLINE_PAREN_RE = /\\\(([^()\n]+?)\\\)/g;
 
 /** 命令替换表：LaTeX 命令 → HTML（对整段源码做正则全局替换）。 */
 function applyCommands(src: string, html: boolean): string {
@@ -42,18 +45,20 @@ function applyCommands(src: string, html: boolean): string {
 /** 小节 LaTeX 源码 → HTML（数学用 KaTeX，常用命令转换）。 */
 export function renderLatexHtml(src: string): string {
   let html = src;
-  // 块级数学（$$...$$）按顺序处理，避免与行内 $ 冲突：先换占位符
+  // 数学环境统一收集为占位符，避免与其余内容交错：
+  // 顺序：$$…$$ → \[…\]（块级）→ $…$ → \(…\)（行内）
   const blocks: string[] = [];
-  html = html.replace(MATH_BLOCK_RE, (_m, body: string) => {
-    const rendered = katex.renderToString(body, { displayMode: true, throwOnError: false, strict: false });
-    blocks.push(rendered);
-    return `\u0000K${blocks.length - 1}\u0000`;
-  });
-  html = html.replace(MATH_INLINE_RE, (_m, body: string) => {
-    const rendered = katex.renderToString(body, { displayMode: false, throwOnError: false, strict: false });
-    blocks.push(rendered);
-    return `\u0000K${blocks.length - 1}\u0000`;
-  });
+  const collect = (re: RegExp, displayMode: boolean): void => {
+    html = html.replace(re, (_m, body: string) => {
+      const rendered = katex.renderToString(body, { displayMode, throwOnError: false, strict: false });
+      blocks.push(rendered);
+      return `\u0000K${blocks.length - 1}\u0000`;
+    });
+  };
+  collect(MATH_BLOCK_RE, true);
+  collect(MATH_DISPLAY_BRACKET_RE, true);
+  collect(MATH_INLINE_RE, false);
+  collect(MATH_INLINE_PAREN_RE, false);
   html = applyCommands(html, true);
   html = html.replace(/\u0000K(\d+)\u0000/g, (_m, i: string) => blocks[Number(i)] ?? '');
   // 段落：空行分段
@@ -66,9 +71,12 @@ export function renderLatexHtml(src: string): string {
   return paras || html;
 }
 
-/** 小节 LaTeX 源码 → Markdown（数学 $...$ 保留给服务端 KaTeX，整篇预览弹窗用）。 */
+/** 小节 LaTeX 源码 → Markdown（数学统一转为 $…$/$$…$$，交给服务端 KaTeX，整篇预览弹窗用）。 */
 export function latexToMarkdown(src: string): string {
-  const md = applyCommands(src, false);
+  let md = src;
+  md = md.replace(MATH_DISPLAY_BRACKET_RE, '$$\n$1\n$$');
+  md = md.replace(MATH_INLINE_PAREN_RE, '$$1$$');
+  md = applyCommands(md, false);
   return md.replace(/\n{3,}/g, '\n\n').trim();
 }
 

@@ -582,6 +582,12 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
     return drafts.setOutline(req.id, items);
   });
 
+  // 修改参考文献列表（顺序即 \cite{refN} 编号顺序）
+  ipc.handle('drafts:setReferences', (req: { id: string; referenceIds?: string[] }) => {
+    const ids = (Array.isArray(req.referenceIds) ? req.referenceIds : []).slice(0, 50);
+    return drafts.update(req.id, { referenceIds: ids });
+  });
+
   ipc.handle('drafts:export', async (req: { id: string; format?: 'docx' | 'md' | 'tex' | 'bib' }) => {
     const d = drafts.get(req.id);
     if (!d) return { ok: false, message: '草稿不存在' };
