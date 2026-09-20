@@ -524,7 +524,8 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
     }
     return {
       paper: (d.paperId && papers.get(d.paperId)) || null,
-      references: d.paperId ? list.filter((p) => p.id !== d.paperId) : list,
+      // 主论文在列表首位（ref1）：与 AI 撰写上下文（ref1 = 主论文）及导出 \cite 编号完全一致
+      references: list,
     };
   }
 

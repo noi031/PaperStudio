@@ -199,10 +199,12 @@ export function WritingPage() {
   };
 
   const current: DraftRecord | null = drafts.find((d) => d.id === currentId) ?? null;
-  // 当前草稿的参考文献详情（按 draft.referenceIds 顺序 = ref1、ref2…）
+  // 当前草稿的参考文献详情（按 draft.referenceIds 顺序 = ref1、ref2…；主论文自动为 ref1、不占勾选编号）
   const refPapers = (current?.referenceIds ?? [])
     .map((id) => papers.find((p) => p.id === id))
     .filter((p): p is NonNullable<typeof p> => Boolean(p));
+  const mainPaper = current?.paperId ? papers.find((p) => p.id === current.paperId) : undefined;
+  const refList = [mainPaper, ...refPapers].filter((p): p is NonNullable<typeof p> => Boolean(p));
 
   const handleCreate = async () => {
     const paper = papers.find((p) => p.id === paperId) ?? null;
@@ -350,24 +352,25 @@ export function WritingPage() {
               {/* 参考文献：编号与 \cite{refN} 对应，可管理增删改 */}
               <Box sx={{ mt: 1, p: 1, border: '1px dashed', borderColor: 'divider', borderRadius: 1 }}>
                 <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-                  <Typography variant="subtitle2" sx={{ fontSize: 13 }}>📚 参考文献（{refPapers.length}）</Typography>
+                  <Typography variant="subtitle2" sx={{ fontSize: 13 }}>📚 参考文献（{refList.length}）</Typography>
                   <Box sx={{ flexGrow: 1 }} />
                   <Button size="small" onClick={openRefDialog}>
                     管理
                   </Button>
                 </Stack>
-                {refPapers.length === 0 ? (
+                {refList.length === 0 ? (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                    暂无参考论文。点「管理」勾选文献库论文，写作时用 {'\\cite{refN}'} 引用（如 {'\\cite{ref1}'}）。
+                    暂无参考文献。点「管理」勾选文献库论文，写作时用 {'\\cite{refN}'} 引用（如 {'\\cite{ref1}'}）。
                   </Typography>
                 ) : (
                   <List dense disablePadding sx={{ mt: 0.5 }}>
-                    {refPapers.map((p, i) => (
+                    {refList.map((p, i) => (
                       <ListItem key={p.id} disableGutters dense sx={{ py: 0.25 }}>
                         <ListItemText
                           primary={
                             <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
                               <b>[ref{i + 1}]</b> {latexToText(p.title) || p.title}
+                              {p.id === current?.paperId && <span style={{ color: '#0969da' }}>（主论文）</span>}
                             </Typography>
                           }
                           secondary={`${[...(p.authors ?? [])].slice(0, 3).join(', ')}${(p.authors ?? []).length > 3 ? ' 等' : ''}${p.year ? ` · ${p.year}` : ''}${p.venue ? ` · ${p.venue}` : ''}`}
@@ -584,7 +587,7 @@ export function WritingPage() {
                 <DialogTitle>管理参考文献</DialogTitle>
                 <DialogContent>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                    勾选文献库论文作为参考；**勾选顺序即引用编号顺序**（第一勾的为 ref1，写作时用 {'\\cite{ref1}'} 引用）。主论文不可勾选（不占编号）。
+                    勾选文献库论文作为参考；**勾选顺序即引用编号顺序**（第一勾的为 ref2，写作时用 {'\\cite{ref2}'} 引用）。主论文自动为 ref1，不可取消勾选。
                   </Typography>
                   <TextField
                     size="small"
