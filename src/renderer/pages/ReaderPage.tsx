@@ -1,5 +1,5 @@
-// 阅读器页：pdfjs 渲染 PDF（canvas + 可选中的文本层），侧栏做选中/全文总结。
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+// 阅读器页：pdfjs 渲染 PDF（canvas + 可选中的文本层），侧栏做选中/全文总结与基于全文/高亮的 AI 问答。
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -23,9 +23,10 @@ import InputLabel from '@mui/material/InputLabel';
 import Tooltip from '@mui/material/Tooltip';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import QuestionAnswerOutlinedIcon from '@mui/icons-material/QuestionAnswerOutlined';
+import { marked } from 'marked';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import { useLibraryStore } from '../store/libraryStore';
-import { useAssistantStore } from '../store/assistantStore';
 import { PromptEditor } from '../components/PromptEditor';
 import { NOTE_COLORS } from '../../shared/types';
 import type { SummaryRecord, NoteRecord, NoteType } from '../../shared/types';
@@ -60,6 +61,33 @@ async function loadPdfjs() {
 }
 
 const KIND_LABEL: Record<string, string> = { selected: '选中总结', full: '全文总结' };
+
+/** AI 问答回答的 Markdown 渲染（marked → HTML，窄栏友好样式）。 */
+function MarkdownAnswer({ text }: { text: string }) {
+  const html = useMemo(() => marked.parse(text, { async: false }) as string, [text]);
+  return (
+    <Box
+      component="div"
+      dangerouslySetInnerHTML={{ __html: html }}
+      sx={{
+        fontSize: 12.5,
+        lineHeight: 1.55,
+        wordBreak: 'break-word',
+        '& p': { my: 0.5 },
+        '& ul, & ol': { my: 0.5, pl: 2.5 },
+        '& li': { my: 0.2 },
+        '& pre': { my: 0.5, p: 0.75, borderRadius: 1, bgcolor: 'action.hover', overflow: 'auto', fontSize: 11.5, whiteSpace: 'pre-wrap' },
+        '& code': { bgcolor: 'action.hover', borderRadius: 0.5, px: 0.4, fontFamily: 'monospace' },
+        '& pre code': { bgcolor: 'transparent', p: 0 },
+        '& table': { borderCollapse: 'collapse', my: 0.5, '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.3 } },
+        '& h1, & h2, & h3, & h4': { fontSize: 'inherit', fontWeight: 600, my: 0.75 },
+        '& blockquote': { my: 0.5, pl: 1, borderLeft: '3px solid', borderColor: 'divider', color: 'text.secondary' },
+        '& a': { color: 'primary.main' },
+        '& img': { maxWidth: '100%', borderRadius: 1 },
+      }}
+    />
+  );
+}
 
 /** 提取论文含图页（operatorList 含图片绘制指令的页）为 PNG dataURL，供总结图文并茂。 */
 async function extractFigureImages(
@@ -186,9 +214,13 @@ export function ReaderPage({
   const [editingNote, setEditingNote] = useState<NoteRecord | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editColor, setEditColor] = useState<string>(NOTE_COLORS[0]);
-  // 基于全文的 AI 问答（流式回答）
+  // 基于全文/高亮的 AI 问答（流式回答）
   const [qaItems, setQaItems] = useState<Array<{ id: string; question: string; answer: string; error: string | null; busy: boolean }>>([]);
   const [qaInput, setQaInput] = useState('');
+  // 问答上下文来源：full=全文；selection=选中的高亮文本
+  const [qaContext, setQaContext] = useState<'full' | 'selection'>('full');
+  const [qaSelectionText, setQaSelectionText] = useState('');
+  const qaInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const off = window.paper.onQaEvent((evt) => {
@@ -208,15 +240,26 @@ export function ReaderPage({
 
   const askQa = async () => {
     const q = qaInput.trim();
-    if (!q || qaItems.some((it) => it.busy) || !fullText.trim()) return;
+    if (!q || qaItems.some((it) => it.busy)) return;
+    const contextText = qaContext === 'selection' ? qaSelectionText : fullText;
+    if (!contextText.trim()) return;
     setQaInput('');
     try {
-      const { id } = await window.paper.invoke('qa:run', { paperTitle: title || '未知论文', fullText, question: q });
+      const { id } = await window.paper.invoke('qa:run', { paperTitle: title || '未知论文', fullText: contextText, question: q });
       setQaItems((items) => [...items, { id, question: q, answer: '', error: null, busy: true }]);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setQaItems((items) => [...items, { id: `err-${Date.now()}`, question: q, answer: '', error: message, busy: false }]);
     }
+  };
+
+  /** 按高亮文本提问：把选中的段落作为问答上下文（替代原「发送到助手」跳转）。 */
+  const handleAskOnSelection = () => {
+    if (!selectedText) return;
+    setQaContext('selection');
+    setQaSelectionText(selectedText);
+    setSelectedText('');
+    qaInputRef.current?.focus();
   };
 
   const docRef = useRef<{ doc: import('pdfjs-dist').PDFDocumentProxy; data: Uint8Array } | null>(null);
@@ -719,18 +762,6 @@ export function ReaderPage({
     });
   };
 
-  const handleSendToAssistant = () => {
-    if (!selectedText) return;
-    // @ 引用块：把选中段落加入助手待发引用列表，可继续在对话里追加问题后一次性发出。
-    useAssistantStore.getState().appendQuote({
-      source: title || '论文',
-      page: pageNum,
-      text: selectedText,
-    });
-    setSelectedText('');
-    onOpenAssistant();
-  };
-
   const paperNotes: NoteRecord[] = notes[paperId ?? ''] ?? [];
 
   const runningStreams = Object.entries(streaming)
@@ -790,12 +821,26 @@ export function ReaderPage({
         <Stack spacing={1} sx={{ p: 1 }}>
           {/* 基于文章内容的 AI 问答 */}
           <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1 }}>
-            <Typography variant="subtitle2" sx={{ fontSize: 12, mb: 0.5 }}>AI 问答（基于全文）</Typography>
+            <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', mb: 0.5 }}>
+              <Typography variant="subtitle2" sx={{ fontSize: 12 }}>AI 问答</Typography>
+              <Box sx={{ flexGrow: 1 }} />
+              {qaContext === 'selection' ? (
+                <Chip size="small" label="基于高亮提问" color="secondary" onDelete={() => setQaContext('full')} />
+              ) : (
+                <Chip size="small" label="基于全文" variant="outlined" />
+              )}
+            </Stack>
+            {qaContext === 'selection' && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, maxHeight: 48, overflow: 'auto' }}>
+                高亮上下文：{latexToText(qaSelectionText).slice(0, 100)}{qaSelectionText.length > 100 ? '…' : ''}
+              </Typography>
+            )}
             <Stack direction="row" spacing={0.8}>
               <TextField
                 size="small"
                 fullWidth
-                placeholder={fullText.trim() ? '就论文内容提问，如：本文的主要方法是什么？' : '全文提取完成后才能提问'}
+                inputRef={qaInputRef}
+                placeholder={qaContext === 'selection' ? '就选中的高亮文本提问…' : fullText.trim() ? '就论文内容提问，如：本文的主要方法是什么？' : '全文提取完成后才能提问'}
                 value={qaInput}
                 onChange={(e) => setQaInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -803,9 +848,9 @@ export function ReaderPage({
                 }}
                 multiline
                 maxRows={3}
-                disabled={qaItems.some((it) => it.busy) || !fullText.trim()}
+                disabled={qaItems.some((it) => it.busy) || (qaContext === 'selection' ? !qaSelectionText.trim() : !fullText.trim())}
               />
-              <Button size="small" variant="contained" disabled={qaItems.some((it) => it.busy) || !qaInput.trim() || !fullText.trim()} onClick={() => void askQa()}>
+              <Button size="small" variant="contained" disabled={qaItems.some((it) => it.busy) || !qaInput.trim() || (qaContext === 'selection' ? !qaSelectionText.trim() : !fullText.trim())} onClick={() => void askQa()}>
                 提问
               </Button>
             </Stack>
@@ -822,9 +867,9 @@ export function ReaderPage({
                 )}
                 {it.error && <Alert severity="error" sx={{ mt: 0.5 }}>{it.error}</Alert>}
                 {it.answer && (
-                  <Typography variant="caption" sx={{ display: 'block', whiteSpace: 'pre-wrap', wordBreak: 'break-word', mt: 0.5 }}>
-                    {it.answer}
-                  </Typography>
+                  <Box sx={{ mt: 0.5 }}>
+                    <MarkdownAnswer text={it.answer} />
+                  </Box>
                 )}
               </Box>
             ))}
@@ -884,8 +929,8 @@ export function ReaderPage({
                 <Button size="small" variant="contained" onClick={() => setShowCommentInput((v) => !v)}>
                   批注
                 </Button>
-                <Button size="small" variant="outlined" color="secondary" onClick={handleSendToAssistant}>
-                  发送到助手
+                <Button size="small" variant="outlined" color="secondary" onClick={handleAskOnSelection}>
+                  按高亮提问
                 </Button>
               </Stack>
               {showCommentInput && (
@@ -935,6 +980,19 @@ export function ReaderPage({
               <ListItem key={n.id} alignItems="flex-start" disableGutters
                 secondaryAction={
                   <Stack direction="row" spacing={0}>
+                    <Tooltip title="基于此高亮文本向 AI 提问">
+                      <IconButton
+                        edge="end"
+                        size="small"
+                        onClick={() => {
+                          setQaContext('selection');
+                          setQaSelectionText(n.text);
+                          setTimeout(() => qaInputRef.current?.focus(), 0);
+                        }}
+                      >
+                        <QuestionAnswerOutlinedIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
                     <Tooltip title={`跳转到第 ${n.page} 页`}>
                       <IconButton edge="end" size="small" onClick={() => void goto(n.page)}>
                         <OpenInNewIcon fontSize="small" />
