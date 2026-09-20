@@ -53,7 +53,11 @@ export function SearchablePaperSelect({
       onChange={(e) => onChange(e.target.value as string | string[])}
       renderValue={(sel) => {
         if (multiple) return `${(sel as string[]).length} 篇参考`;
-        return sel ? paperLabel(papers.find((p) => p.id === sel) as PaperRecord) || placeholder : placeholder;
+        const label = sel
+          ? paperLabel(papers.find((p) => p.id === sel) as PaperRecord) || placeholder
+          : placeholder;
+        // 长标题截断显示（悬停可见全名），避免撑破侧栏
+        return label.length > 46 ? `${label.slice(0, 46)}…` : label;
       }}
       MenuProps={
         {
@@ -61,6 +65,8 @@ export function SearchablePaperSelect({
         } as SelectProps['MenuProps']
       }
       sx={{
+        minWidth: 0,
+        flexGrow: 1,
         '& .MuiSelect-select': { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
         ...sx,
       }}
