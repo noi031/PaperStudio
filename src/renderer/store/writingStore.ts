@@ -5,7 +5,8 @@ import type { DraftRecord } from '../../shared/types';
 interface WritingStore {
   drafts: DraftRecord[];
   loading: boolean;
-  busy: { outlineFor: string | null; sectionFor: string | null; exportingFor: string | null };
+  /** sectionsWriting：正在 AI 撰写的小节集合（可并发多个），格式 `${draftId}:${index}`。 */
+  busy: { outlineFor: string | null; sectionsWriting: string[]; exportingFor: string | null };
   error: string | null;
   load: () => Promise<void>;
   create: (paperId: string | null, title: string, referenceIds?: string[]) => Promise<DraftRecord | null>;
@@ -19,7 +20,7 @@ interface WritingStore {
 export const useWritingStore = create<WritingStore>((set, get) => ({
   drafts: [],
   loading: false,
-  busy: { outlineFor: null, sectionFor: null, exportingFor: null },
+  busy: { outlineFor: null, sectionsWriting: [], exportingFor: null },
   error: null,
 
   load: async () => {
@@ -62,7 +63,9 @@ export const useWritingStore = create<WritingStore>((set, get) => ({
   },
 
   writeSection: async (id, index) => {
-    set({ busy: { ...get().busy, sectionFor: `${id}:${index}` }, error: null });
+    const key = `${id}:${index}`;
+    // 并发撰写：把自己的 key 加入集合，不覆盖其他正在撰写的小节
+    set({ busy: { ...get().busy, sectionsWriting: [...get().busy.sectionsWriting, key] }, error: null });
     try {
       const res = await window.paper.invoke('drafts:writeSection', { id, index });
       if (!res.ok) {
@@ -75,7 +78,9 @@ export const useWritingStore = create<WritingStore>((set, get) => ({
       set({ error: err instanceof Error ? err.message : String(err) });
       return false;
     } finally {
-      set({ busy: { ...get().busy, sectionFor: null } });
+      set({
+        busy: { ...get().busy, sectionsWriting: get().busy.sectionsWriting.filter((k) => k !== key) },
+      });
     }
   },
 

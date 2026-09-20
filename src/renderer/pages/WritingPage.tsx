@@ -110,7 +110,6 @@ export function WritingPage() {
   };
 
   const outlineBusy = busy.outlineFor === currentId;
-  const sectionBusyKey = busy.sectionFor;
   const exporting = busy.exportingFor === currentId;
 
   return (
@@ -225,31 +224,6 @@ export function WritingPage() {
                 >
                   导出 TEX
                 </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={!current || exporting || current.sections.length === 0}
-                  onClick={() => void handleExport('bib')}
-                >
-                  导出 BIB
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<FileDownloadIcon />}
-                  disabled={exporting || current.sections.length === 0}
-                  onClick={() => void handleExport('docx')}
-                >
-                  导出 DOCX
-                </Button>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={exporting || current.sections.length === 0}
-                  onClick={() => void handleExport('md')}
-                >
-                  导出 MD
-                </Button>
               </Stack>
               <PromptEditor settingKey="promptOutline" label="生成大纲" hint="「生成大纲」使用的 AI 提示词" />
               <PromptEditor settingKey="promptSection" label="撰写小节" hint="「AI 撰写 / AI 重写」使用的 AI 提示词" />
@@ -282,7 +256,8 @@ export function WritingPage() {
                 <Stack spacing={1.5} sx={{ mt: 1 }}>
                   {current.outline.map((item, i) => {
                     const section = current.sections[i];
-                    const writingThis = sectionBusyKey === `${current.id}:${i}`;
+                    // 并发撰写：每个小节独立判断自己的撰写状态，互不禁用
+                    const writingThis = busy.sectionsWriting.includes(`${current.id}:${i}`);
                     return (
                       <Box key={i} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
                         <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
