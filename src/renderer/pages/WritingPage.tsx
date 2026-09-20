@@ -32,7 +32,7 @@ import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useLibraryStore } from '../store/libraryStore';
 import { useWritingStore } from '../store/writingStore';
 import { PromptEditor } from '../components/PromptEditor';
-import { SearchablePaperSelect } from '../components/PaperSelect';
+import { SearchablePaperSelect, filterPapers } from '../components/PaperSelect';
 import { latexToText } from '../../shared/latex';
 import { renderLatexHtml, latexToMarkdown, latexHeadingToText } from '../latexPreview';
 import Link from '@mui/material/Link';
@@ -77,10 +77,6 @@ export function WritingPage() {
   const [refDialogOpen, setRefDialogOpen] = useState(false);
   const [refQuery, setRefQuery] = useState('');
   const [refSelected, setRefSelected] = useState<string[]>([]);
-  // 当前草稿的参考文献详情（按 draft.referenceIds 顺序 = ref1、ref2…）
-  const refPapers = (current?.referenceIds ?? [])
-    .map((id) => papers.find((p) => p.id === id))
-    .filter((p): p is NonNullable<typeof p> => Boolean(p));
   // 小节编辑本地缓冲 + 防抖落库（避免每敲一个字一次 IPC/写库）
   const [localDrafts, setLocalDrafts] = useState<Record<string, string>>({});
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -203,6 +199,10 @@ export function WritingPage() {
   };
 
   const current: DraftRecord | null = drafts.find((d) => d.id === currentId) ?? null;
+  // 当前草稿的参考文献详情（按 draft.referenceIds 顺序 = ref1、ref2…）
+  const refPapers = (current?.referenceIds ?? [])
+    .map((id) => papers.find((p) => p.id === id))
+    .filter((p): p is NonNullable<typeof p> => Boolean(p));
 
   const handleCreate = async () => {
     const paper = papers.find((p) => p.id === paperId) ?? null;
@@ -347,6 +347,36 @@ export function WritingPage() {
                   编辑大纲
                 </Button>
               </Stack>
+              {/* 参考文献：编号与 \cite{refN} 对应，可管理增删改 */}
+              <Box sx={{ mt: 1, p: 1, border: '1px dashed', borderColor: 'divider', borderRadius: 1 }}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <Typography variant="subtitle2" sx={{ fontSize: 13 }}>📚 参考文献（{refPapers.length}）</Typography>
+                  <Box sx={{ flexGrow: 1 }} />
+                  <Button size="small" onClick={openRefDialog}>
+                    管理
+                  </Button>
+                </Stack>
+                {refPapers.length === 0 ? (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    暂无参考论文。点「管理」勾选文献库论文，写作时用 {'\\cite{refN}'} 引用（如 {'\\cite{ref1}'}）。
+                  </Typography>
+                ) : (
+                  <List dense disablePadding sx={{ mt: 0.5 }}>
+                    {refPapers.map((p, i) => (
+                      <ListItem key={p.id} disableGutters dense sx={{ py: 0.25 }}>
+                        <ListItemText
+                          primary={
+                            <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
+                              <b>[ref{i + 1}]</b> {latexToText(p.title) || p.title}
+                            </Typography>
+                          }
+                          secondary={`${[...(p.authors ?? [])].slice(0, 3).join(', ')}${(p.authors ?? []).length > 3 ? ' 等' : ''}${p.year ? ` · ${p.year}` : ''}${p.venue ? ` · ${p.venue}` : ''}`}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                )}
+              </Box>
               <PromptEditor settingKey="promptOutline" label="生成大纲" hint="「生成大纲」使用的 AI 提示词" />
               <PromptEditor settingKey="promptSection" label="撰写小节" hint="「AI 撰写 / AI 重写」使用的 AI 提示词" />
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
@@ -536,6 +566,51 @@ export function WritingPage() {
                   })}
                 </Stack>
               )}
+              {/* 参考文献管理对话框 */}
+              <Dialog open={refDialogOpen} onClose={() => setRefDialogOpen(false)} fullWidth maxWidth="sm">
+                <DialogTitle>管理参考文献</DialogTitle>
+                <DialogContent>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                    勾选文献库论文作为参考；**勾选顺序即引用编号顺序**（第一勾的为 ref1，写作时用 {'\\cite{ref1}'} 引用）。
+                  </Typography>
+                  <TextField
+                    size="small"
+                    fullWidth
+                    placeholder="搜索标题 / 作者 / 年份…"
+                    value={refQuery}
+                    onChange={(e) => setRefQuery(e.target.value)}
+                    sx={{ mb: 1 }}
+                  />
+                  <List dense sx={{ maxHeight: 320, overflow: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                    {filterPapers(papers, refQuery).map((p) => {
+                      const checked = refSelected.includes(p.id);
+                      return (
+                        <ListItemButton key={p.id} dense onClick={() => toggleRef(p.id)}>
+                          <Checkbox size="small" checked={checked} onClick={(e) => e.stopPropagation()} onChange={() => toggleRef(p.id)} />
+                          <ListItemText
+                            primary={<Typography variant="body2" sx={{ wordBreak: 'break-word' }}>{latexToText(p.title) || p.title}</Typography>}
+                            secondary={`${[...(p.authors ?? [])].slice(0, 3).join(', ')}${p.year ? ` · ${p.year}` : ''}`}
+                          />
+                        </ListItemButton>
+                      );
+                    })}
+                    {filterPapers(papers, refQuery).length === 0 && (
+                      <Typography variant="caption" color="text.secondary" sx={{ p: 1, display: 'block' }}>
+                        无匹配论文
+                      </Typography>
+                    )}
+                  </List>
+                  {refSelected.length > 0 && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      当前编号：{refSelected.map((id, i) => `ref${i + 1}`).join('、')}
+                    </Typography>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button size="small" onClick={() => setRefDialogOpen(false)}>取消</Button>
+                  <Button size="small" variant="contained" onClick={() => void saveRefs()}>保存</Button>
+                </DialogActions>
+              </Dialog>
             </CardContent>
           </Card>
         )}
