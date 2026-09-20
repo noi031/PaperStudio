@@ -26,6 +26,7 @@ import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useLibraryStore } from '../store/libraryStore';
 import { usePresentationStore } from '../store/presentationStore';
 import { PromptEditor } from '../components/PromptEditor';
+import { SearchablePaperSelect } from '../components/PaperSelect';
 import { latexToText } from '../../shared/latex';
 import { downloadUrlOf, fileNameOf } from '../fileLink';
 import type { PresentationRecord } from '../../shared/types';
@@ -64,30 +65,12 @@ export function PresentPage() {
           </Typography>
           <Typography variant="caption" color="text.secondary">选择论文新建演示</Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
-            <Select
-              size="small"
+            <SearchablePaperSelect
+              papers={papers}
               value={paperId}
-              onChange={(e) => setPaperId(e.target.value)}
-              displayEmpty
-              sx={{
-                flexGrow: 1,
-                minWidth: 0,
-                '& .MuiSelect-select': { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-              }}
-            >
-              <MenuItem value="" disabled>
-                选择论文…
-              </MenuItem>
-              {papers.map((p) => (
-                <MenuItem
-                  key={p.id}
-                  value={p.id}
-                  sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 420 }}
-                >
-                  {(latexToText(p.title) || p.title).slice(0, 60)}
-                </MenuItem>
-              ))}
-            </Select>
+              onChange={(v) => setPaperId(v as string)}
+              placeholder="选择论文…"
+            />
             <Button size="small" variant="contained" disabled={!paperId} onClick={() => void handleCreate()}>
               新建
             </Button>

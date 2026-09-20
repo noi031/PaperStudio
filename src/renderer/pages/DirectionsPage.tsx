@@ -12,6 +12,7 @@ import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import LinearProgress from '@mui/material/LinearProgress';
 import Stack from '@mui/material/Stack';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import Alert from '@mui/material/Alert';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
@@ -19,12 +20,15 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useLibraryStore } from '../store/libraryStore';
 import { useDirectionsStore } from '../store/directionsStore';
 import { PromptEditor } from '../components/PromptEditor';
+import { filterPapers } from '../components/PaperSelect';
 import { latexToText } from '../../shared/latex';
 
 export function DirectionsPage() {
   const { papers, loadPapers } = useLibraryStore();
   const { records, loading, generating, error, load, generate, remove } = useDirectionsStore();
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [paperQuery, setPaperQuery] = useState('');
+  const visiblePapers = filterPapers(papers, paperQuery);
 
   useEffect(() => {
     void loadPapers();
@@ -68,13 +72,21 @@ export function DirectionsPage() {
               清空
             </Button>
           </Stack>
+          <TextField
+            size="small"
+            fullWidth
+            placeholder="搜索文献：标题 / 作者 / 年份…"
+            value={paperQuery}
+            onChange={(e) => setPaperQuery(e.target.value)}
+            sx={{ mb: 1, maxWidth: 420 }}
+          />
           {papers.length === 0 ? (
             <Typography variant="body2" color="text.secondary">
               文献库为空，请先到「检索」页搜索并保存论文。
             </Typography>
           ) : (
             <Stack spacing={0.5}>
-              {papers.map((p) => (
+              {visiblePapers.map((p) => (
                 <FormControlLabel
                   key={p.id}
                   control={<Checkbox size="small" checked={selected.has(p.id)} onChange={() => toggle(p.id)} />}

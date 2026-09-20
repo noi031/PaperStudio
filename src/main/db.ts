@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS papers (
   url TEXT,
   pdf_url TEXT,
   pdf_path TEXT,
-  added_at INTEGER NOT NULL
+  added_at INTEGER NOT NULL,
+  last_read_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS notes (
   id TEXT PRIMARY KEY,
@@ -140,6 +141,9 @@ export class Db {
     }
     if (!hasCol('notes', 'color')) {
       this.db.exec('ALTER TABLE notes ADD COLUMN color TEXT');
+    }
+    if (!hasCol('papers', 'last_read_at')) {
+      this.db.exec('ALTER TABLE papers ADD COLUMN last_read_at INTEGER');
     }
   }
 

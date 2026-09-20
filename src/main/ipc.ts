@@ -387,6 +387,8 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
     try {
       const result = await pdf.ensureAndRead(p);
       papers.setPdfPath(p.id, result.pdfPath);
+      // 记录最近阅读时间（方向建议/写作/演示页的论文列表按此排序）
+      papers.markRead(p.id);
       return result;
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };

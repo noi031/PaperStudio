@@ -16,6 +16,7 @@ interface PaperRow {
   pdf_url: string | null;
   pdf_path: string | null;
   added_at: number;
+  last_read_at: number | null;
 }
 
 function toRecord(r: PaperRow): PaperRecord {
@@ -32,14 +33,18 @@ function toRecord(r: PaperRow): PaperRecord {
     pdfUrl: r.pdf_url,
     pdfPath: r.pdf_path,
     addedAt: r.added_at,
+    lastReadAt: r.last_read_at,
   };
 }
 
 export class PaperRepo {
   constructor(private readonly db: SqliteDb) {}
 
+  /** 全界面统一的论文列表：按最近阅读时间倒序（最近读的第一；从未读的排在最后，按添加时间倒序）。 */
   list(): PaperRecord[] {
-    const rows = this.db.prepare('SELECT * FROM papers ORDER BY added_at DESC').all() as PaperRow[];
+    const rows = this.db
+      .prepare('SELECT * FROM papers ORDER BY last_read_at IS NULL, last_read_at DESC, added_at DESC')
+      .all() as PaperRow[];
     return rows.map(toRecord);
   }
 
@@ -104,5 +109,10 @@ export class PaperRepo {
 
   setPdfPath(id: string, pdfPath: string): void {
     this.db.prepare('UPDATE papers SET pdf_path = ? WHERE id = ?').run(pdfPath, id);
+  }
+
+  /** 记录最近一次阅读（阅读器打开时调用）。 */
+  markRead(id: string): void {
+    this.db.prepare('UPDATE papers SET last_read_at = ? WHERE id = ?').run(Date.now(), id);
   }
 }

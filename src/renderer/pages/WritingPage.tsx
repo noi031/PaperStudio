@@ -26,6 +26,7 @@ import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { useLibraryStore } from '../store/libraryStore';
 import { useWritingStore } from '../store/writingStore';
 import { PromptEditor } from '../components/PromptEditor';
+import { SearchablePaperSelect } from '../components/PaperSelect';
 import { latexToText } from '../../shared/latex';
 import Link from '@mui/material/Link';
 import { downloadUrlOf, fileNameOf } from '../fileLink';
@@ -122,30 +123,12 @@ export function WritingPage() {
           </Typography>
           <Typography variant="caption" color="text.secondary">选择论文新建草稿</Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
-            <Select
-              size="small"
+            <SearchablePaperSelect
+              papers={papers}
               value={paperId}
-              onChange={(e) => setPaperId(e.target.value)}
-              displayEmpty
-              sx={{
-                flexGrow: 1,
-                minWidth: 0,
-                '& .MuiSelect-select': { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-              }}
-            >
-              <MenuItem value="" disabled>
-                选择论文…
-              </MenuItem>
-              {papers.map((p) => (
-                <MenuItem
-                  key={p.id}
-                  value={p.id}
-                  sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 420 }}
-                >
-                  {(latexToText(p.title) || p.title).slice(0, 60)}
-                </MenuItem>
-              ))}
-            </Select>
+              onChange={(v) => setPaperId(v as string)}
+              placeholder="选择论文…"
+            />
             <Button size="small" variant="contained" disabled={!paperId} onClick={() => void handleCreate()}>
               新建
             </Button>
@@ -153,28 +136,14 @@ export function WritingPage() {
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
             参考论文（写作格式/内容参考，可多选）
           </Typography>
-          <Select
-            size="small"
+          <SearchablePaperSelect
+            papers={papers}
             multiple
             value={refIds}
-            onChange={(e) => setRefIds(e.target.value as string[])}
-            renderValue={(sel) => `${sel.length} 篇参考`}
-            sx={{
-              mt: 0.5,
-              width: '100%',
-              '& .MuiSelect-select': { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-            }}
-          >
-            {papers.map((p) => (
-              <MenuItem
-                key={p.id}
-                value={p.id}
-                sx={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 420 }}
-              >
-                {(latexToText(p.title) || p.title).slice(0, 60)}
-              </MenuItem>
-            ))}
-          </Select>
+            onChange={(v) => setRefIds(v as string[])}
+            placeholder="选择参考论文…"
+            sx={{ mt: 0.5, width: '100%' }}
+          />
           {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
         </Box>
         <Divider />

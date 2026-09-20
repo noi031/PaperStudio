@@ -267,7 +267,8 @@ export interface PaperHit {
   pdfUrl: string | null;
 }
 
-/** 库内论文记录（papers 表行）。pdfPath 为绝对路径，可为空（未下载）。 */
+/** 库内论文记录（papers 表行）。pdfPath 为绝对路径，可为空（未下载）；
+ *  lastReadAt 为最近一次在阅读器打开的时间戳，可为空（从未打开）。 */
 export interface PaperRecord {
   id: string;
   title: string;
@@ -281,6 +282,7 @@ export interface PaperRecord {
   pdfUrl: string | null;
   pdfPath: string | null;
   addedAt: number;
+  lastReadAt: number | null;
 }
 
 export type SummaryKind = 'selected' | 'full';

@@ -25,6 +25,7 @@ const paper: PaperRecord = {
   pdfUrl: null,
   pdfPath: null,
   addedAt: 0,
+  lastReadAt: null,
 };
 
 const ref2: PaperRecord = { ...paper, id: 'p2', title: 'Second Ref', externalId: '2402.00002' };

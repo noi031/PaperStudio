@@ -12,15 +12,19 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
 import Chip from '@mui/material/Chip';
+import TextField from '@mui/material/TextField';
 import Alert from '@mui/material/Alert';
 import Link from '@mui/material/Link';
 import { pdfProgressLabel, useLibraryStore } from '../store/libraryStore';
 import { downloadUrlOf, fileNameOf } from '../fileLink';
+import { filterPapers } from '../components/PaperSelect';
 
 export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void }) {
   const { papers, loadPapers, removePaper, downloadPdf, stopDownload, pdfJobs } = useLibraryStore();
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: 'success' | 'error'; text: string; file?: string | null } | null>(null);
+  const [paperQuery, setPaperQuery] = useState('');
+  const visiblePapers = filterPapers(papers, paperQuery);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const bundleInputRef = useRef<HTMLInputElement>(null);
   // 提示条里的产物名做成可点击下载（绝对路径只在服务端使用，不下发到界面）
@@ -177,6 +181,14 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
               {`正在下载 PDF（${downloadingIds.length} 个任务）：可继续使用其他功能，也可在列表中单独停止`}
             </Alert>
           )}
+          <TextField
+            size="small"
+            fullWidth
+            placeholder="搜索文献：标题 / 作者 / 年份…"
+            value={paperQuery}
+            onChange={(e) => setPaperQuery(e.target.value)}
+            sx={{ mb: 1, maxWidth: 420 }}
+          />
           <TableContainer component={Paper}>
           <Table size="small">
             <TableHead>
@@ -190,7 +202,7 @@ export function LibraryPage({ onOpenPaper }: { onOpenPaper: (id: string) => void
               </TableRow>
             </TableHead>
             <TableBody>
-              {papers.map((p) => (
+              {visiblePapers.map((p) => (
                 <TableRow key={p.id}>
                   <TableCell sx={{ maxWidth: 480 }}>
                     <Typography variant="body2">{p.title}</Typography>
