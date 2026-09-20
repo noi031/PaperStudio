@@ -216,13 +216,14 @@ export async function exportDraft(
   const filePath = path.join(dir, format === 'bib' ? 'refs.bib' : `${safe}.${ext}`);
   if (format === 'tex') {
     fs.writeFileSync(filePath, buildLatexDoc(input), 'utf8');
-    if (input.references.length > 0) {
-      fs.writeFileSync(path.join(dir, 'refs.bib'), buildBibtex(input.references), 'utf8');
-    }
+    // 无条件生成 refs.bib：无参考论文时写带说明的空文件，保证导出物完整
+    const bib = input.references.length > 0 ? buildBibtex(input.references) : '% No references\n';
+    fs.writeFileSync(path.join(dir, 'refs.bib'), bib, 'utf8');
     return filePath;
   }
   if (format === 'bib') {
-    fs.writeFileSync(filePath, buildBibtex(input.references), 'utf8');
+    const bib = input.references.length > 0 ? buildBibtex(input.references) : '% No references\n';
+    fs.writeFileSync(filePath, bib, 'utf8');
     return filePath;
   }
   if (format === 'md') {

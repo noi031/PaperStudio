@@ -582,9 +582,12 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
     return drafts.setOutline(req.id, items);
   });
 
-  // 修改参考文献列表（顺序即 \cite{refN} 编号顺序）
+  // 修改参考文献列表（顺序即 \cite{refN} 编号顺序；主论文自动排除，不占引用编号）
   ipc.handle('drafts:setReferences', (req: { id: string; referenceIds?: string[] }) => {
-    const ids = (Array.isArray(req.referenceIds) ? req.referenceIds : []).slice(0, 50);
+    const d = drafts.get(req.id);
+    const ids = (Array.isArray(req.referenceIds) ? req.referenceIds : [])
+      .filter((x) => x && x !== d?.paperId)
+      .slice(0, 50);
     return drafts.update(req.id, { referenceIds: ids });
   });
 
@@ -601,8 +604,8 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
         exportDir,
       );
       drafts.update(d.id, { exportedPath: filePath });
-      // 导出 TEX 时服务端会同时在同目录生成 refs.bib（存在参考文献时），一并返回下载路径
-      const bibPath = req.format === 'tex' && references.length > 0 ? path.join(exportDir, 'refs.bib') : undefined;
+      // 导出 TEX 时服务端会同时在同目录生成 refs.bib，一并返回下载路径（无条件：无参考论文也生成空 bib）
+      const bibPath = req.format === 'tex' ? path.join(exportDir, 'refs.bib') : undefined;
       return { ok: true, path: filePath, bibPath };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };

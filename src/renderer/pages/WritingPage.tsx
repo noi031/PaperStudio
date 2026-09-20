@@ -584,7 +584,7 @@ export function WritingPage() {
                 <DialogTitle>管理参考文献</DialogTitle>
                 <DialogContent>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                    勾选文献库论文作为参考；**勾选顺序即引用编号顺序**（第一勾的为 ref1，写作时用 {'\\cite{ref1}'} 引用）。
+                    勾选文献库论文作为参考；**勾选顺序即引用编号顺序**（第一勾的为 ref1，写作时用 {'\\cite{ref1}'} 引用）。主论文不可勾选（不占编号）。
                   </Typography>
                   <TextField
                     size="small"
@@ -596,12 +596,18 @@ export function WritingPage() {
                   />
                   <List dense sx={{ maxHeight: 320, overflow: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                     {filterPapers(papers, refQuery).map((p) => {
+                      const isMain = p.id === current?.paperId;
                       const checked = refSelected.includes(p.id);
                       return (
-                        <ListItemButton key={p.id} dense onClick={() => toggleRef(p.id)}>
-                          <Checkbox size="small" checked={checked} onClick={(e) => e.stopPropagation()} onChange={() => toggleRef(p.id)} />
+                        <ListItemButton key={p.id} dense disabled={isMain} onClick={() => toggleRef(p.id)}>
+                          <Checkbox size="small" checked={checked || isMain} onClick={(e) => e.stopPropagation()} onChange={() => toggleRef(p.id)} />
                           <ListItemText
-                            primary={<Typography variant="body2" sx={{ wordBreak: 'break-word' }}>{latexToText(p.title) || p.title}</Typography>}
+                            primary={
+                              <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
+                                {latexToText(p.title) || p.title}
+                                {isMain && <b style={{ color: '#0969da' }}>（主论文）</b>}
+                              </Typography>
+                            }
                             secondary={`${[...(p.authors ?? [])].slice(0, 3).join(', ')}${p.year ? ` · ${p.year}` : ''}`}
                           />
                         </ListItemButton>
