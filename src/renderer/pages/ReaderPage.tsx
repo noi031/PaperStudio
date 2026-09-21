@@ -22,6 +22,7 @@ import Select from '@mui/material/Select';
 import InputLabel from '@mui/material/InputLabel';
 import Tooltip from '@mui/material/Tooltip';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import CloseIcon from '@mui/icons-material/Close';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import QuestionAnswerOutlinedIcon from '@mui/icons-material/QuestionAnswerOutlined';
 import 'pdfjs-dist/web/pdf_viewer.css';
@@ -221,12 +222,14 @@ export function ReaderPage({
   const [editColor, setEditColor] = useState<string>(NOTE_COLORS[0]);
   // 基于全文/高亮的 AI 问答（回答生成 Markdown 文件，边框只给链接，点击弹窗查看）。
   // 问答历史按论文绑定：qaByPaper[paperId]，切换论文互不干扰。
-  const [qaByPaper, setQaByPaper] = useState<Record<string, Array<{ id: string; question: string; mdPath: string | null; error: string | null; busy: boolean }>>>({});
+  const [qaByPaper, setQaByPaper] = useState<Record<string, Array<{ id: string; question: string; annotation: string | null; mdPath: string | null; error: string | null; busy: boolean }>>>({});
   const qaItems = qaByPaper[paperId ?? ''] ?? [];
   const [qaInput, setQaInput] = useState('');
   // 问答上下文来源：full=全文；selection=选中的高亮文本
   const [qaContext, setQaContext] = useState<'full' | 'selection'>('full');
   const [qaSelectionText, setQaSelectionText] = useState('');
+  // 随高亮一起发给 AI 的「我的批注」：让 AI 评估批注是否准确并给改进意见
+  const [qaAnnotation, setQaAnnotation] = useState('');
   const qaInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -253,6 +256,7 @@ export function ReaderPage({
   useEffect(() => {
     setQaContext('full');
     setQaSelectionText('');
+    setQaAnnotation('');
   }, [paperId]);
 
   const openQaMd = (mdPath: string) => {
@@ -264,7 +268,10 @@ export function ReaderPage({
   };
 
   const askQa = async () => {
-    const q = qaInput.trim();
+    const typed = qaInput.trim();
+    const annotation = qaContext === 'selection' ? qaAnnotation.trim() : '';
+    // 附带了批注时可以留空问题：默认请 AI 评估批注是否准确并给改进意见
+    const q = typed || (annotation ? '请判断我的批注是否准确，并给出改进意见。' : '');
     if (!q || qaItems.some((it) => it.busy) || !paperId) return;
     const contextText = qaContext === 'selection' ? qaSelectionText : fullText;
     if (!contextText.trim()) return;
@@ -275,25 +282,42 @@ export function ReaderPage({
         paperTitle: title || '未知论文',
         fullText: contextText,
         question: q,
+        annotation: annotation || undefined,
       });
       setQaByPaper((all) => ({
         ...all,
-        [paperId]: [...(all[paperId] ?? []), { id, question: q, mdPath: null, error: null, busy: true }],
+        [paperId]: [...(all[paperId] ?? []), { id, question: q, annotation: annotation || null, mdPath: null, error: null, busy: true }],
       }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setQaByPaper((all) => ({
         ...all,
-        [paperId]: [...(all[paperId] ?? []), { id: `err-${Date.now()}`, question: q, mdPath: null, error: message, busy: false }],
+        [paperId]: [...(all[paperId] ?? []), { id: `err-${Date.now()}`, question: q, annotation: annotation || null, mdPath: null, error: message, busy: false }],
       }));
     }
   };
 
-  /** 按高亮文本提问：把选中的段落作为问答上下文（替代原「发送到助手」跳转）。 */
+  /** 找到与选中文字对应的批注（用于自动附带批注）：先精确匹配，再按包含关系模糊匹配。 */
+  const findNoteForText = (t: string) => {
+    const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+    const target = norm(t);
+    if (!target) return undefined;
+    const exact = paperNotes.find((n) => norm(n.text) === target);
+    if (exact) return exact;
+    return paperNotes.find((n) => {
+      const nt = norm(n.text);
+      return nt.length > 16 && (target.includes(nt) || nt.includes(target));
+    });
+  };
+
+  /** 按高亮文本提问：把选中的段落作为问答上下文（替代原「发送到助手」跳转），
+   *  并自动带上该高亮对应的批注，让 AI 评估批注是否准确、给出改进意见。 */
   const handleAskOnSelection = () => {
     if (!selectedText) return;
+    const note = findNoteForText(selectedText);
     setQaContext('selection');
     setQaSelectionText(selectedText);
+    setQaAnnotation(note?.content?.trim() ?? '');
     setSelectedText('');
     qaInputRef.current?.focus();
   };
@@ -873,12 +897,32 @@ export function ReaderPage({
                 高亮上下文：{latexToText(qaSelectionText).slice(0, 100)}{qaSelectionText.length > 100 ? '…' : ''}
               </Typography>
             )}
+            {qaContext === 'selection' && qaAnnotation.trim() && (
+              <Stack direction="row" spacing={0.3} sx={{ alignItems: 'flex-start', mb: 0.5 }}>
+                <Typography variant="caption" color="secondary" sx={{ flexGrow: 1, maxHeight: 48, overflow: 'auto' }}>
+                  💬 我的批注（将一并发送）：{latexToText(qaAnnotation).slice(0, 80)}{qaAnnotation.length > 80 ? '…' : ''}
+                </Typography>
+                <Tooltip title="不附带批注">
+                  <IconButton size="small" onClick={() => setQaAnnotation('')} sx={{ mt: -0.5 }}>
+                    <CloseIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                </Tooltip>
+              </Stack>
+            )}
             <Stack direction="row" spacing={0.8}>
               <TextField
                 size="small"
                 fullWidth
                 inputRef={qaInputRef}
-                placeholder={qaContext === 'selection' ? '就选中的高亮文本提问…' : fullText.trim() ? '就论文内容提问，如：本文的主要方法是什么？' : '全文提取完成后才能提问'}
+                placeholder={
+                  qaContext === 'selection'
+                    ? qaAnnotation.trim()
+                      ? '留空 = 让 AI 评价我的批注；也可追问，如：这条批注的依据在哪一段？'
+                      : '就选中的高亮文本提问…'
+                    : fullText.trim()
+                      ? '就论文内容提问，如：本文的主要方法是什么？'
+                      : '全文提取完成后才能提问'
+                }
                 value={qaInput}
                 onChange={(e) => setQaInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -888,7 +932,17 @@ export function ReaderPage({
                 maxRows={3}
                 disabled={qaItems.some((it) => it.busy) || (qaContext === 'selection' ? !qaSelectionText.trim() : !fullText.trim())}
               />
-              <Button size="small" variant="contained" disabled={qaItems.some((it) => it.busy) || !qaInput.trim() || (qaContext === 'selection' ? !qaSelectionText.trim() : !fullText.trim())} onClick={() => void askQa()}>
+              <Button
+                size="small"
+                variant="contained"
+                disabled={
+                  qaItems.some((it) => it.busy) ||
+                  (qaContext === 'selection'
+                    ? !qaSelectionText.trim() || (!qaInput.trim() && !qaAnnotation.trim())
+                    : !fullText.trim() || !qaInput.trim())
+                }
+                onClick={() => void askQa()}
+              >
                 提问
               </Button>
             </Stack>
@@ -896,6 +950,7 @@ export function ReaderPage({
               <Box key={it.id} sx={{ mt: 1 }}>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                   Q：{it.question}
+                  {it.annotation && <Chip size="small" label="含批注" color="secondary" sx={{ ml: 0.5, height: 16, fontSize: 10 }} />}
                 </Typography>
                 {it.busy && (
                   <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
@@ -1024,13 +1079,15 @@ export function ReaderPage({
               <ListItem key={n.id} alignItems="flex-start" disableGutters
                 secondaryAction={
                   <Stack direction="row" spacing={0}>
-                    <Tooltip title="基于此高亮文本向 AI 提问">
+                    <Tooltip title={n.content?.trim() ? '基于此高亮文本 + 我的批注向 AI 提问（AI 会评价批注并给改进意见）' : '基于此高亮文本向 AI 提问'}>
                       <IconButton
                         edge="end"
                         size="small"
                         onClick={() => {
                           setQaContext('selection');
                           setQaSelectionText(n.text);
+                          // 带上这条批注：AI 会评估批注是否准确并给改进意见
+                          setQaAnnotation(n.content?.trim() ?? '');
                           setTimeout(() => qaInputRef.current?.focus(), 0);
                         }}
                       >

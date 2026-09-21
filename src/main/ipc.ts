@@ -428,8 +428,10 @@ export function registerIpc(ipc: HandlerRegistrar, deps: IpcDeps): void {
   // ── 阅读器 AI 问答 ────────────────────────────────────────
   // 基于论文全文/高亮文本回答问题：立即返回 job id，回答完成后生成 Markdown，
   // 增量与结果经 qa:event 推送（done 携带 mdPath）。
-  ipc.handle('qa:run', (req: { paperId: string; paperTitle: string; fullText: string; question: string }) =>
-    qa.run(req.paperId, req.paperTitle, req.fullText, req.question),
+  ipc.handle(
+    'qa:run',
+    (req: { paperId: string; paperTitle: string; fullText: string; question: string; annotation?: string }) =>
+      qa.run(req.paperId, req.paperTitle, req.fullText, req.question, req.annotation),
   );
 
   // ── 行内批注 ──────────────────────────────────────────────

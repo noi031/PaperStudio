@@ -187,7 +187,7 @@ export interface IpcContract {
     res: { id: string };
   };
   'qa:run': {
-    req: { paperId: string; paperTitle: string; fullText: string; question: string };
+    req: { paperId: string; paperTitle: string; fullText: string; question: string; annotation?: string };
     res: { id: string };
   };
   'markdown:open': { req: { path: string }; res: { ok: boolean; message?: string; url?: string } };

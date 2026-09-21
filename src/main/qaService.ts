@@ -17,6 +17,41 @@ export interface QaServiceOptions {
   markdownDir: string;
 }
 
+/** 组装问答消息（纯函数，供单测）：带批注时要求 AI 先评估批注再回答。 */
+export function buildQaMessages(
+  paperTitle: string,
+  text: string,
+  question: string,
+  annotation?: string,
+): Array<{ role: 'system' | 'user'; content: string }> {
+  const tip = annotation?.trim();
+  return [
+    {
+      role: 'system',
+      content:
+        '你是论文阅读问答助手。用户会提供一篇论文的标题、相关文本（全文或高亮段落），以及针对这篇论文的问题。' +
+        '请基于提供的内容回答，使用中文，回答使用 Markdown 格式（可用加粗、列表、小标题等使排版清晰）；' +
+        '数学公式用 LaTeX 记号书写并包裹：行内公式用 $...$（如 $E=mc^2$），独立成行的大公式用 $$...$$。' +
+        '若提供的内容中没有相关信息，请明确说明论文未涉及该内容，不要编造。' +
+        '回答尽量具体，可引用论文中的方法、结论或数据。' +
+        (tip
+          ? '\n\n本次用户还提供了他自己针对高亮段落写的批注，请务必按以下顺序处理：' +
+            '① 先判断该批注是否准确，明确给出结论（准确／部分准确／不准确）并说明理由（引用论文原文或逻辑依据）；' +
+            '② 指出批注中不准确、片面或遗漏的地方；' +
+            '③ 给出改进后的批注：更准确的表述、可补充的要点与依据（分点写，便于用户直接采用）；' +
+            '④ 最后回答用户的问题；若用户没有提出具体问题，完成 ①②③ 即可，不要追问。'
+          : ''),
+    },
+    {
+      role: 'user',
+      content:
+        `论文标题：${paperTitle}\n\n相关文本：\n${text}\n\n` +
+        (tip ? `我的批注：\n${tip}\n\n` : '') +
+        `问题：${question}`,
+    },
+  ];
+}
+
 export class QaService {
   constructor(private readonly opts: QaServiceOptions) {}
 
@@ -24,8 +59,9 @@ export class QaService {
     this.opts.emit('qa:event', payload);
   }
 
-  /** 启动一次基于论文全文的问答；立即返回 job id，增量走 qa:event。 */
-  run(paperId: string, paperTitle: string, fullText: string, question: string): { id: string } {
+  /** 启动一次基于论文全文的问答；立即返回 job id，增量走 qa:event。
+ *  annotation：用户对高亮段落的批注（可选）——提供时 AI 会先评估批注是否准确并给改进意见。 */
+run(paperId: string, paperTitle: string, fullText: string, question: string, annotation?: string): { id: string } {
     const id = randomUUID();
     const settings = this.opts.getSettings();
     if (resolveBackend(() => settings) === 'echocap') {
@@ -38,37 +74,31 @@ export class QaService {
       this.emit({ id, kind: 'error', message: '未配置 LLM API Key，请到设置页填写' });
       return { id };
     }
-    void this.ask(paperId, paperTitle, fullText, question, id);
+    void this.ask(paperId, paperTitle, fullText, question, annotation, id);
     return { id };
   }
 
-  private async ask(paperId: string, paperTitle: string, fullText: string, question: string, id: string): Promise<void> {
+  private async ask(
+    paperId: string,
+    paperTitle: string,
+    fullText: string,
+    question: string,
+    annotation: string | undefined,
+    id: string,
+  ): Promise<void> {
     try {
       const settings = this.opts.getSettings();
       const maxChars = settings.llmMaxInputChars || 120000;
       const text =
         fullText.length > maxChars ? `${fullText.slice(0, maxChars)}\n\n…（全文过长，已截断）` : fullText;
-      const messages = [
-        {
-          role: 'system' as const,
-          content:
-            '你是论文阅读问答助手。用户会提供一篇论文的标题、相关文本（全文或高亮段落），以及针对这篇论文的问题。' +
-            '请基于提供的内容回答，使用中文，回答使用 Markdown 格式（可用加粗、列表、小标题等使排版清晰）；' +
-            '数学公式用 LaTeX 记号书写并包裹：行内公式用 $...$（如 $E=mc^2$），独立成行的大公式用 $$...$$。' +
-            '若提供的内容中没有相关信息，请明确说明论文未涉及该内容，不要编造。' +
-            '回答尽量具体，可引用论文中的方法、结论或数据。',
-        },
-        {
-          role: 'user' as const,
-          content: `论文标题：${paperTitle}\n\n相关文本：\n${text}\n\n问题：${question}`,
-        },
-      ];
+      const tip = annotation?.trim();
+      const messages = buildQaMessages(paperTitle, text, question, tip);
       let content = '';
       await chatTextStream(settings, messages, (delta) => {
         content += delta;
         this.emit({ id, kind: 'delta', text: delta });
       });
-      const mdPath = this.writeMd(paperId, paperTitle, question, content);
+      const mdPath = this.writeMd(paperId, paperTitle, question, content, tip);
       this.emit({ id, kind: 'done', mdPath });
     } catch (err) {
       this.emit({ id, kind: 'error', message: err instanceof Error ? err.message : String(err) });
@@ -76,7 +106,13 @@ export class QaService {
   }
 
   /** 把问答内容写成 Markdown 文件（markdownDir/qa/），返回绝对路径。 */
-  private writeMd(paperId: string, paperTitle: string, question: string, content: string): string | null {
+  private writeMd(
+    paperId: string,
+    paperTitle: string,
+    question: string,
+    content: string,
+    annotation?: string,
+  ): string | null {
     try {
       const dir = path.join(this.opts.markdownDir, 'qa');
       fs.mkdirSync(dir, { recursive: true });
@@ -88,7 +124,10 @@ export class QaService {
         .replace(/-/g, '')
         .slice(0, 14);
       const file = path.join(dir, `${safe}-${paperId.slice(0, 8)}-${stamp}.md`);
-      const md = `# 论文问答\n\n**论文**：${paperTitle}\n\n**问题**：${question}\n\n**时间**：${new Date().toLocaleString('zh-CN')}\n\n---\n\n${content}\n`;
+      const md =
+        `# 论文问答\n\n**论文**：${paperTitle}\n\n` +
+        (annotation ? `**我的批注**：${annotation}\n\n` : '') +
+        `**问题**：${question}\n\n**时间**：${new Date().toLocaleString('zh-CN')}\n\n---\n\n${content}\n`;
       fs.writeFileSync(file, md, 'utf8');
       return file;
     } catch (err) {
